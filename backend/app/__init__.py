@@ -8,8 +8,9 @@ def create_app():
 
     # Enable CORS for all routes and set specific origins
     cors = CORS(app, origins=[
-        "http://localhost:3000/",
-    ])
+        "http://localhost:3000",
+        "*",   
+    ], supports_credentials=True)
 
     # Initialize MongoDB
     mongo = get_mongodb(app)
