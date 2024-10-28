@@ -35,7 +35,10 @@ def get_course_by_courseid():
 
 @blueprint.route(baseRoute + '/courses/recommendations', methods=['GET'])
 def get_course_recommendations():
+    user_email = request.args.get('email')
+    if not user_email:
+        return jsonify({"error": "Email parameter is required"}), 400
     mongo = current_app.mongo
-    courses_data = recommend_driver()
+    courses_data = recommend_driver(user_email)
 
     return courses_data
