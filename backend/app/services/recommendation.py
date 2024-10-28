@@ -26,14 +26,15 @@ from .user_data import get_current_user_data
 from ..utils.dataframe import make_threefield_dataframe, sort_dataframe, make_dataframe
 import pandas as pd
 
-def recommend_driver():
+def recommend_driver(user_email):
+    print("Preparing recommendations for: ", user_email)
     # get organized course data from the DB
     courses_data = get_courses_data()
     course_skills = make_dataframe(courses_data)
     vectorized_course_skills, course_vectorizer = get_vectorized_course_matrix(course_skills)
 
     ## User skills
-    user_data = get_current_user_data()
+    user_data = get_current_user_data(user_email)
     user_skills = json.loads(json.dumps(user_data, indent=4))['skills']
     user_skills_combined = ", ".join(user_skills)
     user_skills = [user_skills_combined]
