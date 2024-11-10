@@ -10,8 +10,12 @@ def get_config():
     return config
 
 def get_mongodb(app):
-    config = get_config()
     # Set the MongoDB URI in the Flask app's configuration by retrieving the DB_URI under the DEV section
-    app.config["MONGO_URI"] = config['DEV']['DB_URI']
+    db_uri = os.getenv("DB_URI")
+    if db_uri:
+        app.config["MONGO_URI"] = db_uri
+    else:
+        config = get_config()
+        app.config["MONGO_URI"] = config['DEV']['DB_URI']
     mongo = PyMongo(app)
     return mongo
