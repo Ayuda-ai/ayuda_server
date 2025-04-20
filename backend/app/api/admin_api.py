@@ -2,12 +2,11 @@ from flask import request, jsonify, Blueprint, current_app
 from ..database.db import get_config
 from ..utils.api_base_route import get_api_base_route
 import pandas as pd
+import os
 
 baseRoute = get_api_base_route()
 
 blueprint = Blueprint('admin_api', __name__)
-
-config = get_config()
 
 '''
 This Admin API allows admins to add new access codes for users
@@ -24,11 +23,14 @@ def add_access_codes():
         mongo = current_app.mongo
         access_code = request.json
 
-        print(config['ADMIN']['ADMIN_KEY'])
+        admin_key = os.getenv("ADMIN_KEY")
+        if not admin_key:
+            config = get_config()
+            admin_key = config['ADMIN']['ADMIN_KEY']
 
         if not access_code or 'admin_key' not in access_code:
             return jsonify({"error": "Missing 'admin_key' field"}), 400
-        elif access_code['admin_key'] != config['ADMIN']['ADMIN_KEY']:
+        elif access_code['admin_key'] != admin_key:
             return jsonify({"error": "Wrong 'admin_key' entered!"}), 400
 
         if 'validity' not in access_code:
