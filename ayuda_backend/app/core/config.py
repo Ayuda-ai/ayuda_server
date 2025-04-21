@@ -1,10 +1,25 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    database_url: str
+    # DB Fields (parsed from .env)
+    postgres_db: str
+    postgres_user: str
+    postgres_password: str
+    database_host: str
+    database_port: int
+
+    # JWT Configs
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
+
+    # Dynamically build DATABASE_URL from individual components
+    @property
+    def database_url(self) -> str:
+        return (
+            f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.database_host}:{self.database_port}/{self.postgres_db}"
+        )
 
     class Config:
         env_file = ".env"
