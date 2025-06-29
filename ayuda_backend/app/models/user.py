@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, Text, TIMESTAMP
+from sqlalchemy import Column, String, Date, Text, TIMESTAMP, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -15,4 +15,7 @@ class User(Base):
     password_hash = Column(Text, nullable=False)
     dob = Column(Date, nullable=False)
     major = Column(String(100), nullable=False)
+    role = Column(String(20), nullable=False, default="USER")
+    resume_embedding = Column(JSON, nullable=True)  # Store embedding as JSON array
+    resume_text = Column(Text, nullable=True)  # Store extracted resume text for keyword matching
     created_at = Column(TIMESTAMP, server_default=func.now())

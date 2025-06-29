@@ -18,6 +18,7 @@ class UserOut(BaseModel):
     email: EmailStr
     dob: date
     major: str
+    role: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True

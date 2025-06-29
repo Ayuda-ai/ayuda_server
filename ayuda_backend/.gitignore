@@ -105,3 +105,6 @@ ayuda_venv_3_11/
 .mypy_cache/
 
 settings.json
+
+tests/
+logs/

@@ -13,6 +13,16 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
 
+    # Pinecone Configs
+    pinecone_api_key: str
+    pinecone_env: str
+    pinecone_index: str
+
+    # Redis Configs
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+
     # Dynamically build DATABASE_URL from individual components
     @property
     def database_url(self) -> str:
@@ -23,5 +33,6 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        case_sensitive = False  # This makes environment variables case-insensitive
 
 settings = Settings()

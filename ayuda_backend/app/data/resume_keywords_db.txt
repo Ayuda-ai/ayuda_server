@@ -1,0 +1,151 @@
+adaptability
+agile
+agile methodology
+ai
+analytical thinking
+angular
+ansible
+api
+api gateway
+artificial intelligence
+aws
+azure
+backend
+bash
+big data
+bitbucket
+blockchain
+bootstrap
+business
+c
+c#
+c++
+cassandra
+chai
+ci/cd
+clean code
+cloud computing
+communication
+concurrency
+containers
+critical thinking
+cv
+data analysis
+data lake
+data structures
+data visualization
+database
+databases
+deep learning
+design patterns
+devops
+distributed computing
+django
+docker
+dynamodb
+elastic stack
+endpoint
+ethics
+event-driven
+express.js
+flask
+functional programming
+gcp
+git
+github
+gitlab
+go
+grafana
+graphql
+hadoop
+hibernate
+hive
+http
+integration testing
+intellectual property
+java
+jenkins
+jira
+junit
+kafka
+kafka streams
+kanban
+kibana
+kubernetes
+leadership
+legal system
+linux
+logstash
+machine learning
+mapreduce
+material ui
+message queues
+microservices
+mobile development
+mocha
+mongodb
+monolith
+mvc
+mysql
+nestjs
+networking
+neural networks
+next.js
+nlp
+node.js
+object-oriented
+object-oriented programming
+openapi
+operating systems
+oracle
+orm
+performance
+performance optimization
+perl
+pig
+postgresql
+postman
+presentation
+problem solving
+product owner
+professional responsibility
+project management
+prometheus
+pytest
+python
+pytorch
+react
+redis
+redux
+research
+rest
+restful api
+ruby
+safe agile
+scala
+scrum
+security
+server-side
+social responsibility
+software design
+software engineering
+spark
+spring
+spring boot
+sprint
+sqlite
+statistics
+swagger
+system design
+team collaboration
+tensorflow
+terraform
+testing
+time management
+typescript
+unit testing
+unittest
+user experience
+version control
+vue.js
+web development

@@ -10,6 +10,7 @@ from alembic import context
 
 from app.db.session import engine, Base
 from app.models.user import User
+from app.models.course import Course
 from app.models.access_code import AccessCode
 from app.models.allowed_domain import AllowedDomain
 from app.core.config import settings
