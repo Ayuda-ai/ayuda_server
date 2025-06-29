@@ -65,6 +65,7 @@ pytz==2025.2
 pyxnat==1.6.3
 PyYAML==6.0.2
 rdflib==6.3.2
+redis==5.2.1
 regex==2024.11.6
 requests==2.32.3
 rsa==4.9.1
