@@ -1,0 +1,14 @@
+[
+    {
+      "major": "CSYE",
+      "foundational_course_ids": ["CSYE6200", "INFO6205"]
+    },
+    {
+      "major": "INFO",
+      "foundational_course_ids": ["INFO5100"]
+    },
+    {
+      "major": "DAMG",
+      "foundational_course_ids": []
+    }
+  ]
