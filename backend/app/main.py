@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.api import user, auth, admin
+from app.api import user, auth, admin, course
 from app.db.session import engine
 from app.models import user as user_model
 from app.models import access_code, allowed_domain
@@ -34,6 +34,27 @@ def run_migrations():
     alembic_cfg = Config(os.path.join(base_dir, "alembic.ini"))
     command.upgrade(alembic_cfg, "head")
 
+def should_run_migrations() -> bool:
+    """
+    Check if migrations should be run on startup.
+    
+    Returns True if migrations should run, False otherwise.
+    This prevents running migrations on every startup when not needed.
+    """
+    # Check if RUN_MIGRATIONS_ON_STARTUP environment variable is set
+    run_migrations_env = os.getenv("RUN_MIGRATIONS_ON_STARTUP", "false").lower()
+    
+    if run_migrations_env in ["true", "1", "yes"]:
+        return True
+    
+    # Check if we're in development mode
+    if os.getenv("ENVIRONMENT", "development").lower() == "development":
+        # In development, only run migrations if explicitly requested
+        return False
+    
+    # In production, run migrations by default
+    return True
+
 @app.on_event("startup")
 def startup_event():
     """
@@ -41,15 +62,18 @@ def startup_event():
     
     This function is called when the FastAPI application starts up.
     It performs necessary initialization tasks such as:
-    - Running database migrations to ensure schema is up to date
+    - Running database migrations to ensure schema is up to date (when needed)
     - Setting up any required application state
     
     This ensures the application is properly configured before
     accepting any requests.
     """
-    print("🔄 Running migrations at startup...")
-    run_migrations()
-    print("✅ Migrations applied successfully.")
+    if should_run_migrations():
+        print("🔄 Running migrations at startup...")
+        run_migrations()
+        print("✅ Migrations applied successfully.")
+    else:
+        print("⏭️ Skipping migrations on startup (set RUN_MIGRATIONS_ON_STARTUP=true to enable)")
 
 # Include API routers with their respective prefixes and tags
 # Users router - handles user registration, profile management, and resume processing
@@ -60,3 +84,6 @@ app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 
 # Admin router - handles administrative functions like course import
 app.include_router(admin.router, prefix="/admin", tags=["Admin Utilities"])
+
+# Course router - handles course search and retrieval functionality
+app.include_router(course.router, prefix="/courses", tags=["Courses"])

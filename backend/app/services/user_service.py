@@ -31,31 +31,49 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Initialize Pinecone (shared with course service)
-try:
-    pc = Pinecone(api_key=settings.pinecone_api_key)
-    index = pc.Index(settings.pinecone_index)
-    logger.info(f"Pinecone initialized successfully with index: {settings.pinecone_index}")
-except Exception as e:
-    logger.error(f"Failed to initialize Pinecone: {str(e)}")
-    pc = None
-    index = None
+# Global variables for lazy loading
+_pinecone_pc = None
+_pinecone_index = None
+_embedding_model = None
 
-# Load embedding model (shared with course service)
-model = SentenceTransformer('all-MiniLM-L6-v2')
-logger.info("SentenceTransformer model 'all-MiniLM-L6-v2' loaded successfully")
+def get_pinecone_connection():
+    """Lazy load Pinecone connection"""
+    global _pinecone_pc, _pinecone_index
+    
+    if _pinecone_pc is None:
+        try:
+            _pinecone_pc = Pinecone(api_key=settings.pinecone_api_key)
+            _pinecone_index = _pinecone_pc.Index(settings.pinecone_index)
+            logger.info(f"Pinecone initialized successfully with index: {settings.pinecone_index}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone: {str(e)}")
+            _pinecone_pc = None
+            _pinecone_index = None
+    
+    return _pinecone_pc, _pinecone_index
+
+def get_embedding_model():
+    """Lazy load SentenceTransformer model"""
+    global _embedding_model
+    
+    if _embedding_model is None:
+        logger.info("Loading SentenceTransformer model 'all-MiniLM-L6-v2'...")
+        _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("SentenceTransformer model 'all-MiniLM-L6-v2' loaded successfully")
+    
+    return _embedding_model
 
 class UserService:
     """
-    Service class for handling user-related operations including authentication,
-    resume processing, and embedding management.
+    Service class for user-related operations including registration, authentication,
+    resume processing, and course matching functionality.
     
-    This service provides functionality for:
+    This service provides comprehensive user management capabilities:
     - User registration and validation
-    - Resume text extraction and embedding generation
-    - Storage and retrieval of resume embeddings in PostgreSQL and Pinecone
-    - Course matching based on resume embeddings and keyword matching
-    - Comprehensive logging and metrics for recommendation analysis
+    - Resume upload and text extraction
+    - Embedding generation and storage
+    - Course matching using semantic similarity
+    - Hybrid storage in PostgreSQL and Pinecone
     """
     
     def __init__(self, db: Session):
@@ -301,7 +319,7 @@ class UserService:
             logger.debug(f"Generating embedding for text of length: {len(cleaned_text)} chars")
             
             # Generate embedding
-            embedding = model.encode(cleaned_text).tolist()
+            embedding = get_embedding_model().encode(cleaned_text).tolist()
             generation_time = time.time() - start_time
             
             # Validate embedding
@@ -354,8 +372,7 @@ class UserService:
         try:
             # Initialize Pinecone connection directly in this method
             logger.debug("Initializing Pinecone connection...")
-            pc = Pinecone(api_key=settings.pinecone_api_key)
-            index = pc.Index(settings.pinecone_index)
+            pc, index = get_pinecone_connection()
             logger.debug(f"Pinecone connected to index: {settings.pinecone_index}")
             
             # Prepare metadata
@@ -430,8 +447,7 @@ class UserService:
         logger.debug(f"Retrieving resume embedding from Pinecone for user: {user_id}")
         try:
             # Initialize Pinecone connection directly
-            pc = Pinecone(api_key=settings.pinecone_api_key)
-            index = pc.Index(settings.pinecone_index)
+            pc, index = get_pinecone_connection()
             
             results = index.fetch(ids=[f"resume:{user_id}"])
             if results and f"resume:{user_id}" in results.vectors:
@@ -459,8 +475,7 @@ class UserService:
         logger.info(f"Deleting resume embedding from Pinecone for user: {user_id}")
         try:
             # Initialize Pinecone connection directly
-            pc = Pinecone(api_key=settings.pinecone_api_key)
-            index = pc.Index(settings.pinecone_index)
+            pc, index = get_pinecone_connection()
             
             index.delete(ids=[f"resume:{user_id}"])
             logger.info(f"Resume embedding deleted from Pinecone successfully")
@@ -689,8 +704,7 @@ class UserService:
         """
         try:
             # Initialize Pinecone connection
-            pc = Pinecone(api_key=settings.pinecone_api_key)
-            index = pc.Index(settings.pinecone_index)
+            pc, index = get_pinecone_connection()
             
             # Query Pinecone for similar courses
             results = index.query(
@@ -714,3 +728,33 @@ class UserService:
         except Exception as e:
             logger.error(f"Error in semantic course matching: {str(e)}")
             return []
+
+    def update_profile_enhancement_status(self, user_id: str, enhanced: bool) -> bool:
+        """
+        Update the user's profile enhancement status.
+        
+        This method updates the profile_enhanced field in the user's record
+        to indicate whether they have completed profile enhancement features.
+        
+        Args:
+            user_id (str): Unique identifier for the user
+            enhanced (bool): Whether the profile is enhanced
+            
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
+        logger.info(f"Updating profile enhancement status for user {user_id}: {enhanced}")
+        try:
+            user = self.db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.profile_enhanced = enhanced
+                user.updated_at = datetime.utcnow()
+                self.db.commit()
+                logger.info(f"Profile enhancement status updated successfully for user: {user_id}")
+                return True
+            logger.warning(f"User not found for profile enhancement update: {user_id}")
+            return False
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error updating profile enhancement status: {str(e)}")
+            return False

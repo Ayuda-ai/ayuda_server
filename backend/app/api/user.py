@@ -940,3 +940,628 @@ def debug_recommendation_system(
     except Exception as e:
         logger.error(f"Debug generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating debug info: {str(e)}")
+
+# ============================================================================
+# PHASE 3: SMART RESUME MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@router.post("/resume")
+async def upload_or_update_resume(
+    file: UploadFile = File(...),
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Smart resume upload/update endpoint.
+    
+    This endpoint handles both initial resume upload and resume updates:
+    - If user has no resume: Creates new resume embedding
+    - If user has existing resume: Updates with new resume (overwrites)
+    
+    The endpoint performs complete resume processing:
+    1. Extracts text from PDF/DOCX file
+    2. Generates 384-dimensional embedding
+    3. Stores in PostgreSQL and Pinecone
+    4. Updates user's profile_enhanced status
+    
+    Args:
+        file (UploadFile): Resume file (PDF or DOCX)
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Processing results with operation type and storage status
+        
+    Raises:
+        HTTPException: If file type is unsupported (400), user not found (404), or processing fails (500)
+    """
+    logger.info(f"Smart resume upload/update request for file: {file.filename}")
+    start_time = time.time()
+    
+    # Validate file type
+    if file.content_type not in [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ]:
+        logger.warning(f"Unsupported file type rejected: {file.content_type}")
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Only PDF and DOCX files are allowed."
+        )
+    
+    user_service = UserService(db)
+    try:
+        user = user_service.get_user_by_token(token)
+        logger.debug(f"User authenticated for resume upload: {user.id}")
+        
+        # Check if user already has a resume
+        existing_embedding = user_service.get_resume_embedding_from_postgresql(user.id)
+        operation_type = "update" if existing_embedding else "create"
+        
+        # Extract text and generate embedding
+        resume_text = user_service.extract_text_from_document(file)
+        embedding = user_service.create_resume_embedding(resume_text)
+        
+        # Store both embedding and text
+        store_results = user_service.store_resume_embedding_hybrid(user.id, embedding, user, resume_text)
+        
+        # Update profile enhancement status
+        user_service.update_profile_enhancement_status(user.id, True)
+        
+        total_time = time.time() - start_time
+        logger.info(f"Resume {operation_type} completed successfully for user {user.id}. Time: {total_time:.2f}s")
+        
+        return {
+            "message": f"Resume {operation_type}d successfully.",
+            "operation_type": operation_type,
+            "embedding_dim": len(embedding),
+            "storage": store_results,
+            "profile_enhanced": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resume upload/update failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing resume: {str(e)}"
+        )
+
+@router.get("/resume")
+def get_resume_info(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Get current user's resume information.
+    
+    This endpoint returns metadata about the user's current resume,
+    including whether they have one uploaded and basic processing info.
+    
+    Args:
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Resume information including:
+            - has_resume: Boolean indicating if resume exists
+            - embedding_dim: Dimensions of embedding (if exists)
+            - profile_enhanced: Whether profile is enhanced
+            - created_at: When resume was last updated
+            
+    Raises:
+        HTTPException: If user not found (404)
+    """
+    logger.debug("Resume info retrieval request")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        # Check if user has resume
+        embedding = user_service.get_resume_embedding_from_postgresql(user.id)
+        resume_text = user_service.get_resume_text_from_postgresql(user.id)
+        
+        has_resume = embedding is not None and resume_text is not None
+        
+        response = {
+            "has_resume": has_resume,
+            "profile_enhanced": user.profile_enhanced,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+        
+        if has_resume:
+            response.update({
+                "embedding_dim": len(embedding),
+                "text_length": len(resume_text),
+                "last_updated": user.updated_at.isoformat() if user.updated_at else None
+            })
+        
+        logger.debug(f"Resume info retrieved successfully for user: {user.id}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resume info retrieval failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving resume info: {str(e)}")
+
+@router.delete("/resume")
+def delete_resume(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete the current user's resume completely.
+    
+    This endpoint removes all resume-related data:
+    - Resume embedding from PostgreSQL
+    - Resume text from PostgreSQL
+    - Resume vector from Pinecone
+    - Updates profile_enhanced status to False
+    
+    Args:
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Deletion results including:
+            - message: Success message
+            - postgresql_deleted: True if PostgreSQL deletion succeeded
+            - pinecone_deleted: True if Pinecone deletion succeeded
+            - profile_enhanced: Updated status (False)
+            
+    Raises:
+        HTTPException: If user not found (404) or deletion fails (500)
+    """
+    logger.info("Resume deletion request")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        # Delete from both storage systems
+        pg_result = user_service.delete_resume_embedding_postgresql(user.id)
+        pinecone_result = user_service.delete_resume_embedding_from_pinecone(user.id)
+        
+        # Update profile enhancement status
+        user_service.update_profile_enhancement_status(user.id, False)
+        
+        logger.info(f"Resume deletion completed for user {user.id}. PostgreSQL: {pg_result}, Pinecone: {pinecone_result}")
+        
+        return {
+            "message": "Resume deleted successfully.",
+            "postgresql_deleted": pg_result,
+            "pinecone_deleted": pinecone_result,
+            "profile_enhanced": False
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resume deletion failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting resume: {str(e)}")
+
+# ============================================================================
+# PHASE 3: COMPLETED COURSES MANAGEMENT
+# ============================================================================
+
+@router.get("/profile/completed-courses")
+def get_completed_courses(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the current user's completed courses.
+    
+    Args:
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Completed courses information:
+            - completed_courses: List of course IDs
+            - count: Number of completed courses
+            
+    Raises:
+        HTTPException: If user not found (404)
+    """
+    logger.debug("Completed courses retrieval request")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        completed_courses = user.completed_courses or []
+        
+        logger.debug(f"Completed courses retrieved for user {user.id}: {len(completed_courses)} courses")
+        
+        return {
+            "completed_courses": completed_courses,
+            "count": len(completed_courses)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Completed courses retrieval failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving completed courses: {str(e)}")
+
+@router.post("/profile/completed-courses")
+def add_completed_courses(
+    course_ids: List[str],
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Add completed courses to the user's profile.
+    
+    Args:
+        course_ids (List[str]): List of course IDs to add
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Updated completed courses information
+        
+    Raises:
+        HTTPException: If user not found (404) or update fails (500)
+    """
+    logger.info(f"Adding completed courses request: {len(course_ids)} courses")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        # Add new course IDs to existing ones
+        current_courses = user.completed_courses or []
+        new_courses = list(set(current_courses + course_ids))  # Remove duplicates
+        
+        # Update user's completed courses
+        user.completed_courses = new_courses
+        user_service.update_profile_enhancement_status(user.id, True)
+        
+        db.commit()
+        
+        logger.info(f"Completed courses updated for user {user.id}: {len(new_courses)} total courses")
+        
+        return {
+            "message": f"Added {len(course_ids)} completed courses.",
+            "completed_courses": new_courses,
+            "count": len(new_courses),
+            "profile_enhanced": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Adding completed courses failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error adding completed courses: {str(e)}")
+
+@router.put("/profile/completed-courses")
+def update_completed_courses(
+    course_ids: List[str],
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Replace the user's completed courses with a new list.
+    
+    Args:
+        course_ids (List[str]): New list of course IDs
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Updated completed courses information
+        
+    Raises:
+        HTTPException: If user not found (404) or update fails (500)
+    """
+    logger.info(f"Updating completed courses request: {len(course_ids)} courses")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        # Replace with new course IDs
+        user.completed_courses = course_ids
+        user_service.update_profile_enhancement_status(user.id, True)
+        
+        db.commit()
+        
+        logger.info(f"Completed courses replaced for user {user.id}: {len(course_ids)} courses")
+        
+        return {
+            "message": f"Updated completed courses to {len(course_ids)} courses.",
+            "completed_courses": course_ids,
+            "count": len(course_ids),
+            "profile_enhanced": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Updating completed courses failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating completed courses: {str(e)}")
+
+@router.delete("/profile/completed-courses/{course_id}")
+def remove_completed_course(
+    course_id: str,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Remove a specific course from the user's completed courses.
+    
+    Args:
+        course_id (str): Course ID to remove
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Updated completed courses information
+        
+    Raises:
+        HTTPException: If user not found (404) or update fails (500)
+    """
+    logger.info(f"Removing completed course request: {course_id}")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        current_courses = user.completed_courses or []
+        
+        if course_id in current_courses:
+            current_courses.remove(course_id)
+            user.completed_courses = current_courses
+            db.commit()
+            
+            logger.info(f"Removed course {course_id} from user {user.id}")
+            
+            return {
+                "message": f"Removed course {course_id} from completed courses.",
+                "completed_courses": current_courses,
+                "count": len(current_courses)
+            }
+        else:
+            logger.warning(f"Course {course_id} not found in user {user.id}'s completed courses")
+            raise HTTPException(status_code=404, detail=f"Course {course_id} not found in completed courses")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Removing completed course failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error removing completed course: {str(e)}")
+
+# ============================================================================
+# PHASE 3: ADDITIONAL SKILLS MANAGEMENT
+# ============================================================================
+
+@router.get("/profile/additional-skills")
+def get_additional_skills(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the current user's additional skills.
+    
+    Args:
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Additional skills information:
+            - additional_skills: User's additional skills text
+            - has_skills: Boolean indicating if skills are provided
+            
+    Raises:
+        HTTPException: If user not found (404)
+    """
+    logger.debug("Additional skills retrieval request")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        additional_skills = user.additional_skills or ""
+        has_skills = bool(additional_skills.strip())
+        
+        logger.debug(f"Additional skills retrieved for user {user.id}: {len(additional_skills)} characters")
+        
+        return {
+            "additional_skills": additional_skills,
+            "has_skills": has_skills
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Additional skills retrieval failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving additional skills: {str(e)}")
+
+@router.put("/profile/additional-skills")
+def update_additional_skills(
+    skills_data: dict,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Update the current user's additional skills.
+    
+    Args:
+        skills_data (dict): Skills data containing:
+            - additional_skills (str): New additional skills text
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Updated skills information:
+            - message: Success message
+            - additional_skills: Updated skills text
+            - has_skills: Boolean indicating if skills are provided
+            - profile_enhanced: Updated profile status
+            
+    Raises:
+        HTTPException: If user not found (404) or update fails (500)
+    """
+    logger.info("Additional skills update request")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        additional_skills = skills_data.get("additional_skills", "")
+        
+        # Update user's additional skills
+        user.additional_skills = additional_skills
+        user_service.update_profile_enhancement_status(user.id, True)
+        
+        db.commit()
+        
+        has_skills = bool(additional_skills.strip())
+        logger.info(f"Additional skills updated for user {user.id}: {len(additional_skills)} characters")
+        
+        return {
+            "message": "Additional skills updated successfully.",
+            "additional_skills": additional_skills,
+            "has_skills": has_skills,
+            "profile_enhanced": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Additional skills update failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating additional skills: {str(e)}")
+
+# ============================================================================
+# PHASE 3: PROFILE ENHANCEMENT STATUS
+# ============================================================================
+
+@router.get("/profile/enhancement-status")
+def get_profile_enhancement_status(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the current user's profile enhancement status.
+    
+    This endpoint returns information about what profile enhancement
+    features the user has completed.
+    
+    Args:
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Profile enhancement status:
+            - profile_enhanced: Overall enhancement status
+            - has_resume: Whether user has uploaded resume
+            - has_completed_courses: Whether user has added completed courses
+            - has_additional_skills: Whether user has provided additional skills
+            - completion_percentage: Percentage of enhancement features completed
+            
+    Raises:
+        HTTPException: If user not found (404)
+    """
+    logger.debug("Profile enhancement status request")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        # Check each enhancement feature
+        has_resume = user.resume_embedding is not None and user.resume_text is not None
+        has_completed_courses = bool(user.completed_courses and len(user.completed_courses) > 0)
+        has_additional_skills = bool(user.additional_skills and user.additional_skills.strip())
+        
+        # Calculate completion percentage
+        features_completed = sum([has_resume, has_completed_courses, has_additional_skills])
+        completion_percentage = (features_completed / 3) * 100
+        
+        logger.debug(f"Profile enhancement status retrieved for user {user.id}: {completion_percentage:.1f}% complete")
+        
+        return {
+            "profile_enhanced": user.profile_enhanced,
+            "has_resume": has_resume,
+            "has_completed_courses": has_completed_courses,
+            "has_additional_skills": has_additional_skills,
+            "completion_percentage": round(completion_percentage, 1),
+            "features_completed": features_completed,
+            "total_features": 3
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Profile enhancement status retrieval failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving profile enhancement status: {str(e)}")
+
+@router.post("/profile/enhance")
+def complete_profile_enhancement(
+    enhancement_data: dict,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Complete profile enhancement with all available data.
+    
+    This endpoint allows users to provide all profile enhancement
+    data in a single request.
+    
+    Args:
+        enhancement_data (dict): Enhancement data containing:
+            - completed_courses (List[str], optional): List of completed course IDs
+            - additional_skills (str, optional): Additional skills text
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        dict: Profile enhancement results:
+            - message: Success message
+            - profile_enhanced: Updated profile status
+            - completion_percentage: Updated completion percentage
+            
+    Raises:
+        HTTPException: If user not found (404) or update fails (500)
+    """
+    logger.info("Profile enhancement completion request")
+    try:
+        user_service = UserService(db)
+        user = user_service.get_user_by_token(token)
+        
+        # Update completed courses if provided
+        if "completed_courses" in enhancement_data:
+            user.completed_courses = enhancement_data["completed_courses"]
+        
+        # Update additional skills if provided
+        if "additional_skills" in enhancement_data:
+            user.additional_skills = enhancement_data["additional_skills"]
+        
+        # Mark profile as enhanced
+        user_service.update_profile_enhancement_status(user.id, True)
+        
+        db.commit()
+        
+        # Get updated status
+        has_resume = user.resume_embedding is not None and user.resume_text is not None
+        has_completed_courses = bool(user.completed_courses and len(user.completed_courses) > 0)
+        has_additional_skills = bool(user.additional_skills and user.additional_skills.strip())
+        
+        features_completed = sum([has_resume, has_completed_courses, has_additional_skills])
+        completion_percentage = (features_completed / 3) * 100
+        
+        logger.info(f"Profile enhancement completed for user {user.id}: {completion_percentage:.1f}% complete")
+        
+        return {
+            "message": "Profile enhancement completed successfully.",
+            "profile_enhanced": True,
+            "completion_percentage": round(completion_percentage, 1),
+            "features_completed": features_completed,
+            "total_features": 3
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Profile enhancement completion failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error completing profile enhancement: {str(e)}")
