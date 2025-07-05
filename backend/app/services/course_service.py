@@ -17,19 +17,37 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Initialize Pinecone
-try:
-    pc = Pinecone(api_key=settings.pinecone_api_key)
-    index = pc.Index(settings.pinecone_index)
-    logger.info(f"Pinecone initialized successfully with index: {settings.pinecone_index}")
-except Exception as e:
-    logger.error(f"Failed to initialize Pinecone: {str(e)}")
-    pc = None
-    index = None
+# Global variables for lazy loading
+_pinecone_pc = None
+_pinecone_index = None
+_embedding_model = None
 
-# Load embedding model
-model = SentenceTransformer('all-MiniLM-L6-v2')
-logger.info("SentenceTransformer model 'all-MiniLM-L6-v2' loaded successfully for course service")
+def get_pinecone_connection():
+    """Lazy load Pinecone connection"""
+    global _pinecone_pc, _pinecone_index
+    
+    if _pinecone_pc is None:
+        try:
+            _pinecone_pc = Pinecone(api_key=settings.pinecone_api_key)
+            _pinecone_index = _pinecone_pc.Index(settings.pinecone_index)
+            logger.info(f"Pinecone initialized successfully with index: {settings.pinecone_index}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone: {str(e)}")
+            _pinecone_pc = None
+            _pinecone_index = None
+    
+    return _pinecone_pc, _pinecone_index
+
+def get_embedding_model():
+    """Lazy load SentenceTransformer model"""
+    global _embedding_model
+    
+    if _embedding_model is None:
+        logger.info("Loading SentenceTransformer model 'all-MiniLM-L6-v2'...")
+        _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("SentenceTransformer model 'all-MiniLM-L6-v2' loaded successfully")
+    
+    return _embedding_model
 
 # Connect to PostgreSQL
 conn = psycopg2.connect(
@@ -78,6 +96,10 @@ def embed_and_index_courses():
     
     upserts = []
     embedding_time = 0
+    
+    # Lazy load the embedding model
+    model = get_embedding_model()
+    
     for i, (course_id, name, major, domains, skills, text) in enumerate(rows):
         if not text:
             logger.warning(f"Skipping course {course_id} - no combined text available")
@@ -106,6 +128,9 @@ def embed_and_index_courses():
     if upserts:
         logger.info(f"Upserting {len(upserts)} course vectors to Pinecone")
         pinecone_start = time.time()
+        
+        # Lazy load Pinecone connection
+        pc, index = get_pinecone_connection()
         
         # Check if Pinecone is initialized
         if index is None:
