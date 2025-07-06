@@ -719,6 +719,7 @@ def match_courses_semantic_only(
     processing_metrics = {}
     system_health = {}
     resume_info = {}
+    keyword_analysis = {}
     
     try:
         user_service = UserService(db)
