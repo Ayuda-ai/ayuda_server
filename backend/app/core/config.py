@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
     # DB Fields (parsed from .env)
@@ -23,6 +24,11 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
 
+    # Neo4j Configs (optional)
+    neo4j_uri: Optional[str] = None
+    neo4j_username: Optional[str] = None
+    neo4j_password: Optional[str] = None
+
     # Dynamically build DATABASE_URL from individual components
     @property
     def database_url(self) -> str:
@@ -34,5 +40,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False  # This makes environment variables case-insensitive
+        extra = "ignore"  # Ignore extra fields
 
 settings = Settings()

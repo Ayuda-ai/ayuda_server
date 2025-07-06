@@ -5,7 +5,9 @@ import time
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.models.course import Course
 
 # Configure logging
 logging.basicConfig(
@@ -21,6 +23,75 @@ load_dotenv()
 _pinecone_pc = None
 _pinecone_index = None
 _embedding_model = None
+
+class CourseService:
+    """
+    Service class for course-related operations.
+    
+    This service handles:
+    - Course retrieval from database
+    - Course embedding and indexing
+    - Course search functionality
+    """
+    
+    def __init__(self):
+        """Initialize the CourseService."""
+        pass
+    
+    def get_all_courses(self, db: Session):
+        """
+        Get all courses from the database using SQLAlchemy.
+        
+        Args:
+            db (Session): SQLAlchemy database session
+            
+        Returns:
+            List[Course]: List of all courses
+        """
+        try:
+            courses = db.query(Course).all()
+            logger.info(f"Retrieved {len(courses)} courses from database")
+            return courses
+        except Exception as e:
+            logger.error(f"Error retrieving courses: {str(e)}")
+            return []
+    
+    def get_course_by_id(self, db: Session, course_id: str):
+        """
+        Get a specific course by ID.
+        
+        Args:
+            db (Session): SQLAlchemy database session
+            course_id (str): Course ID to retrieve
+            
+        Returns:
+            Course: The course object or None if not found
+        """
+        try:
+            course = db.query(Course).filter(Course.id == course_id).first()
+            return course
+        except Exception as e:
+            logger.error(f"Error retrieving course {course_id}: {str(e)}")
+            return None
+    
+    def get_courses_by_major(self, db: Session, major: str):
+        """
+        Get courses by major.
+        
+        Args:
+            db (Session): SQLAlchemy database session
+            major (str): Major to filter by
+            
+        Returns:
+            List[Course]: List of courses for the specified major
+        """
+        try:
+            courses = db.query(Course).filter(Course.major == major).all()
+            logger.info(f"Retrieved {len(courses)} courses for major: {major}")
+            return courses
+        except Exception as e:
+            logger.error(f"Error retrieving courses for major {major}: {str(e)}")
+            return []
 
 def get_pinecone_connection():
     """Lazy load Pinecone connection"""

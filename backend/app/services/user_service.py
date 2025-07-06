@@ -12,6 +12,7 @@ from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
 from dotenv import load_dotenv
 from datetime import datetime
+import ast
 
 from app.schemas.user import UserCreate
 from app.models.user import User
@@ -668,7 +669,7 @@ class UserService:
                 return self.get_semantic_course_matches(embedding, top_k)
             
             # Get semantic matches first
-            semantic_matches = self.get_semantic_course_matches(embedding, top_k)
+            semantic_matches = self.get_semantic_course_matches(embedding, top_k * 3)  # Get more candidates for better hybrid matching
             
             if not semantic_matches:
                 logger.warning(f"No semantic matches found for user: {user_id}")
@@ -758,3 +759,101 @@ class UserService:
             self.db.rollback()
             logger.error(f"Error updating profile enhancement status: {str(e)}")
             return False
+
+    def get_all_courses(self) -> list:
+        """
+        Get all courses from the database for comprehensive prerequisite checking.
+        
+        This method retrieves all courses from the database to ensure that
+        courses with no prerequisites are included in recommendations, even
+        if they have lower hybrid scores.
+        
+        Returns:
+            list: List of all courses with their metadata
+        """
+        logger.info("Retrieving all courses from database for comprehensive prerequisite checking")
+        try:
+            from app.models.course import Course
+            
+            courses = self.db.query(Course).all()
+            course_list = []
+            
+            for course in courses:
+                # Parse domains properly
+                domains = []
+                if course.domains:
+                    try:
+                        # Try to parse as list if it's a string representation
+                        if isinstance(course.domains, str):
+                            # Handle different string formats
+                            if course.domains.startswith('[') and course.domains.endswith(']'):
+                                # Parse as list string
+                                parsed_domains = ast.literal_eval(course.domains)
+                                if isinstance(parsed_domains, list):
+                                    domains = parsed_domains
+                                else:
+                                    domains = [parsed_domains]
+                            else:
+                                # Treat as single string
+                                domains = [course.domains]
+                        else:
+                            domains = course.domains
+                    except:
+                        # If parsing fails, treat as single item
+                        domains = [course.domains] if course.domains else []
+                
+                # Parse skills_associated properly
+                skills_associated = []
+                if course.skills_associated:
+                    try:
+                        # Try to parse as list if it's a string representation
+                        if isinstance(course.skills_associated, str):
+                            # Handle different string formats
+                            if course.skills_associated.startswith('[') and course.skills_associated.endswith(']'):
+                                # Parse as list string
+                                parsed_skills = ast.literal_eval(course.skills_associated)
+                                if isinstance(parsed_skills, list):
+                                    skills_associated = parsed_skills
+                                else:
+                                    skills_associated = [parsed_skills]
+                            else:
+                                # Treat as single string
+                                skills_associated = [course.skills_associated]
+                        else:
+                            skills_associated = course.skills_associated
+                    except:
+                        # If parsing fails, treat as single item
+                        skills_associated = [course.skills_associated] if course.skills_associated else []
+                
+                # Clean up the arrays - remove 'nan', empty strings, and extra quotes
+                def clean_array(arr):
+                    cleaned = []
+                    for item in arr:
+                        if item and item != 'nan' and item != "'nan'" and item != 'None':
+                            # Remove extra quotes if present
+                            cleaned_item = item.strip("'\"")
+                            if cleaned_item:
+                                cleaned.append(cleaned_item)
+                    return cleaned
+                
+                domains = clean_array(domains)
+                skills_associated = clean_array(skills_associated)
+                
+                course_data = {
+                    "id": str(course.id),
+                    "course_id": course.course_id,
+                    "course_name": course.course_name,
+                    "domains": domains,
+                    "major": course.major,
+                    "skills_associated": skills_associated,
+                    "prerequisites": course.prerequisites,
+                    "description": course.course_description
+                }
+                course_list.append(course_data)
+            
+            logger.info(f"Retrieved {len(course_list)} courses from database")
+            return course_list
+            
+        except Exception as e:
+            logger.error(f"Error retrieving all courses: {str(e)}")
+            return []

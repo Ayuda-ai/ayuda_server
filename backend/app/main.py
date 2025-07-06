@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.api import user, auth, admin, course
+from app.api import user, auth, admin, course, neo4j
 from app.db.session import engine
 from app.models import user as user_model
 from app.models import access_code, allowed_domain
@@ -87,3 +87,6 @@ app.include_router(admin.router, prefix="/admin", tags=["Admin Utilities"])
 
 # Course router - handles course search and retrieval functionality
 app.include_router(course.router, prefix="/courses", tags=["Courses"])
+
+# Neo4j router - handles graph operations and prerequisites management
+app.include_router(neo4j.router, prefix="/neo4j", tags=["Neo4j Graph Operations"])
