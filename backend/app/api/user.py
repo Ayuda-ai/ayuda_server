@@ -9,6 +9,7 @@ import time
 from app.schemas.user import UserCreate, UserOut
 from app.db.session import get_db
 from app.services.user_service import UserService
+from app.services.neo4j_service import Neo4jService
 from app.models.user import User
 from app.core.config import settings
 from app.core.security import create_access_token, oauth2_scheme
@@ -347,16 +348,18 @@ def match_courses_with_resume(
     db: Session = Depends(get_db)
 ):
     """
-    Find top-k matching courses using hybrid approach combining semantic similarity and keyword matching.
+    Find top-k matching courses using hybrid approach combining semantic similarity, keyword matching, and prerequisite checking.
     
-    This endpoint performs a hybrid course matching approach that combines:
+    This endpoint performs a comprehensive course matching approach that combines:
     1. Semantic similarity search between resume embeddings and course embeddings
     2. Keyword matching between resume text and course skills using Redis
+    3. Prerequisite checking using Neo4j to determine course eligibility
     
     The hybrid approach provides more accurate recommendations by:
     - Using semantic similarity for understanding context and meaning
     - Using keyword matching for exact skill and technology matches
-    - Combining both scores with configurable weights (70% semantic, 30% keyword by default)
+    - Checking prerequisites to separate eligible vs ineligible courses
+    - Combining all scores with configurable weights (70% semantic, 30% keyword by default)
     
     Args:
         top_k (int): Number of top matching courses to return (default: 5, max: 100)
@@ -364,33 +367,39 @@ def match_courses_with_resume(
         db (Session): Database session dependency
         
     Returns:
-        dict: Enhanced course matching results:
-            - matches: List of matching courses, each containing:
-                - id: Course ID
-                - semantic_score: Similarity score from embedding comparison (0-1)
-                - keyword_score: Similarity score from keyword matching (0-1)
-                - hybrid_score: Combined weighted score (0-1)
-                - metadata: Course metadata (name, major, domains, skills)
-                - matching_keywords: List of keywords that matched between resume and course
-                
+        dict: Enhanced course matching results with prerequisite information:
+            - eligible_matches: List of courses user can take (prerequisites met)
+            - ineligible_matches: List of courses requiring prerequisites user hasn't completed
+            - total_matches: Total number of matching courses
+            - prerequisite_analysis: Summary of prerequisite checking
+            - user_completed_courses: List of user's completed courses
+            - processing_metrics: Performance and timing information
+            
     Raises:
         HTTPException: If user not found (status_code=404), no resume embedding exists (status_code=404), or matching fails (status_code=500)
     """
-    logger.info(f"Hybrid course matching request with top_k={top_k}")
+    logger.info(f"Hybrid course matching with prerequisite checking request with top_k={top_k}")
     start_time = time.time()
     
     # Initialize tracking variables
     user = None
     enhanced_matches = []
+    eligible_matches = []
+    ineligible_matches = []
     error_info = None
     processing_metrics = {}
     system_health = {}
     resume_info = {}
     keyword_analysis = {}
+    prerequisite_analysis = {}
     
     try:
         user_service = UserService(db)
+        neo4j_service = Neo4jService()
         user = user_service.get_user_by_token(token)
+        
+        # Get user's completed courses
+        completed_courses = user.completed_courses or []
         
         # Get resume information
         embedding = user_service.get_resume_embedding_from_postgresql(user.id)
@@ -403,7 +412,8 @@ def match_courses_with_resume(
             "embedding_dimensions": len(embedding) if embedding else 0,
             "resume_text_length": len(resume_text) if resume_text else 0,
             "major": user.major,
-            "university": user.university
+            "university": user.university,
+            "completed_courses_count": len(completed_courses)
         }
         
         # Check system health
@@ -421,13 +431,22 @@ def match_courses_with_resume(
             logger.warning(f"Pinecone connection test failed: {str(e)}")
             pinecone_status = False
         
+        # Check Neo4j connection
+        neo4j_status = neo4j_service.is_configured() and neo4j_service.test_connection()
+        
+        # Debug Neo4j status
+        logger.info(f"Neo4j status: configured={neo4j_service.is_configured()}, connected={neo4j_service.test_connection()}")
+        if not neo4j_status:
+            logger.warning("Neo4j not available for prerequisite checking")
+        
         database_status = True
         
         system_health = {
             "redis_connection": redis_status,
             "pinecone_connection": pinecone_status,
+            "neo4j_connection": neo4j_status,
             "database_connection": database_status,
-            "overall_status": all([redis_status, pinecone_status, database_status])
+            "overall_status": all([redis_status, pinecone_status, neo4j_status, database_status])
         }
         
         # Get keyword analysis if resume text exists
@@ -441,11 +460,130 @@ def match_courses_with_resume(
             }
         
         # Get hybrid course matches
-        enhanced_matches = user_service.get_hybrid_course_matches(user.id, top_k)
+        enhanced_matches = user_service.get_hybrid_course_matches(user.id, 50)  # Increase top_k for better candidate pool
         
         if not enhanced_matches:
             logger.warning(f"No course matches found for user: {user.id}")
             enhanced_matches = []
+        
+        # Get ALL courses from database to check prerequisites comprehensively
+        all_courses = user_service.get_all_courses()
+        logger.info(f"Retrieved {len(all_courses)} total courses from database")
+        
+        # Debug: Show first few courses
+        if all_courses:
+            logger.info(f"Sample course data: {all_courses[0]}")
+        
+        # Check prerequisites for ALL courses if Neo4j is available
+        if neo4j_status and all_courses:
+            logger.info(f"Checking prerequisites for {len(all_courses)} courses")
+            logger.info(f"Neo4j status: {neo4j_status}, all_courses count: {len(all_courses)}")
+            prerequisite_start_time = time.time()
+            
+            # Create a set of course IDs from enhanced matches for quick lookup
+            enhanced_course_ids = {str(course["id"]) for course in enhanced_matches}
+            
+            # Check prerequisites for all courses
+            for course_data in all_courses:
+                course_id = str(course_data["id"])
+                course_code = course_data.get("course_id", "")
+                
+                # Check prerequisites using Neo4j
+                prereq_status = neo4j_service.check_prerequisites_completion(
+                    course_code, completed_courses
+                )
+                
+                # Create course object with prerequisite information
+                course_obj = {
+                    "id": course_code,  # Use course_code instead of UUID
+                    "semantic_score": 0.0,  # Will be updated if in enhanced matches
+                    "keyword_score": 0.0,   # Will be updated if in enhanced matches
+                    "hybrid_score": 0.0,    # Will be updated if in enhanced matches
+                    "metadata": {
+                        "course_name": course_data.get("course_name", ""),
+                        "domains": course_data.get("domains", []),
+                        "major": course_data.get("major", ""),
+                        "skills_associated": course_data.get("skills_associated", []),
+                        "type": "course"
+                    },
+                    "matching_keywords": [],  # Will be updated if in enhanced matches
+                    "prerequisite_status": prereq_status,
+                    "eligible": prereq_status["prerequisites_met"],
+                    "prerequisites": prereq_status.get("prerequisite_groups", []),
+                    "missing_prerequisites": prereq_status.get("missing_prerequisites", []),
+                    "completed_prerequisites": prereq_status.get("completed_prerequisites", [])
+                }
+                
+                # If this course was in the enhanced matches, update with actual scores
+                if course_code in enhanced_course_ids:  # Match by course_code, not UUID
+                    for enhanced_course in enhanced_matches:
+                        if str(enhanced_course["id"]) == course_code:  # Match by course_code
+                            course_obj.update({
+                                "semantic_score": enhanced_course.get("semantic_score", 0.0),
+                                "keyword_score": enhanced_course.get("keyword_score", 0.0),
+                                "hybrid_score": enhanced_course.get("hybrid_score", 0.0),
+                                "matching_keywords": enhanced_course.get("matching_keywords", [])
+                            })
+                            logger.debug(f"✅ Updated scores for course {course_code}: hybrid_score={enhanced_course.get('hybrid_score', 0.0)}")
+                            break
+                else:
+                    # For courses not in hybrid matches, give them a small base score if they have no prerequisites
+                    if not prereq_status["has_prerequisites"]:
+                        course_obj.update({
+                            "semantic_score": 0.1,  # Small base score for courses with no prerequisites
+                            "keyword_score": 0.1,
+                            "hybrid_score": 0.1,
+                            "matching_keywords": []
+                        })
+                
+                # Categorize course based on prerequisites and scores
+                if prereq_status["prerequisites_met"]:
+                    # User can take this course
+                    eligible_matches.append(course_obj)
+                    logger.debug(f"✅ Course {course_code} is eligible")
+                else:
+                    # User cannot take this course yet
+                    course_obj["prerequisite_message"] = f"Complete one of: {', '.join([p['name'] for p in prereq_status['missing_prerequisites']])}"
+                    ineligible_matches.append(course_obj)
+                    logger.debug(f"❌ Course {course_code} is ineligible: {course_obj['prerequisite_message']}")
+            
+            # Sort eligible matches by hybrid score (highest first)
+            eligible_matches.sort(key=lambda x: x["hybrid_score"], reverse=True)
+            
+            # Sort ineligible matches by hybrid score (highest first)
+            ineligible_matches.sort(key=lambda x: x["hybrid_score"], reverse=True)
+            
+            # Limit to top_k for each category
+            eligible_matches = eligible_matches[:top_k]
+            ineligible_matches = ineligible_matches[:top_k]
+            
+            prerequisite_time = time.time() - prerequisite_start_time
+            prerequisite_analysis = {
+                "prerequisites_checked": True,
+                "total_courses_checked": len(all_courses),
+                "eligible_count": len(eligible_matches),
+                "ineligible_count": len(ineligible_matches),
+                "prerequisite_checking_time": prerequisite_time,
+                "user_completed_courses": completed_courses
+            }
+            
+            logger.info(f"Prerequisite checking completed: {len(eligible_matches)} eligible, {len(ineligible_matches)} ineligible")
+        else:
+            # Debug why we're falling into this block
+            logger.warning(f"Falling into else block: neo4j_status={neo4j_status}, all_courses_count={len(all_courses) if all_courses else 0}")
+            
+            # No prerequisite checking (Neo4j not available) - use original enhanced matches
+            # Sort by hybrid score and limit to top_k
+            enhanced_matches.sort(key=lambda x: x.get("hybrid_score", 0), reverse=True)
+            eligible_matches = enhanced_matches[:top_k]
+            ineligible_matches = []
+            prerequisite_analysis = {
+                "prerequisites_checked": False,
+                "reason": "Neo4j not configured or unavailable",
+                "total_courses_checked": len(enhanced_matches),
+                "eligible_count": len(eligible_matches),
+                "ineligible_count": 0
+            }
         
         # Calculate processing metrics
         end_time = time.time()
@@ -453,19 +591,20 @@ def match_courses_with_resume(
         
         processing_metrics = {
             "total_processing_time": total_time,
-            "semantic_processing_time": total_time * 0.7,  # Estimate
+            "semantic_processing_time": total_time * 0.6,  # Estimate
             "keyword_processing_time": total_time * 0.2,   # Estimate
+            "prerequisite_checking_time": prerequisite_analysis.get("prerequisite_checking_time", 0),
             "hybrid_scoring_time": total_time * 0.1        # Estimate
         }
         
         matching_time = time.time() - start_time
-        logger.info(f"Hybrid course matching completed successfully for user {user.id}. Found {len(enhanced_matches)} matches. Time: {matching_time:.2f}s")
+        logger.info(f"Hybrid course matching with prerequisite checking completed successfully for user {user.id}. Found {len(enhanced_matches)} matches ({len(eligible_matches)} eligible, {len(ineligible_matches)} ineligible). Time: {matching_time:.2f}s")
         
         # Generate JSON log file
         log_file_path = recommendation_logger.log_recommendation_request(
             user_id=str(user.id),
             user_email=user.email,
-            request_type="hybrid",
+            request_type="hybrid_with_prerequisites",
             top_k=top_k,
             start_time=start_time,
             end_time=end_time,
@@ -479,7 +618,15 @@ def match_courses_with_resume(
         
         logger.info(f"📊 Recommendation log saved: {log_file_path}")
         
-        return {"matches": enhanced_matches}
+        return {
+            "eligible_matches": eligible_matches,
+            "ineligible_matches": ineligible_matches,
+            "total_matches": len(all_courses) if neo4j_status else len(enhanced_matches),
+            "prerequisite_analysis": prerequisite_analysis,
+            "user_completed_courses": completed_courses,
+            "processing_metrics": processing_metrics,
+            "system_health": system_health
+        }
         
     except HTTPException as e:
         error_info = {
@@ -494,7 +641,7 @@ def match_courses_with_resume(
             recommendation_logger.log_recommendation_request(
                 user_id=str(user.id),
                 user_email=user.email,
-                request_type="hybrid",
+                request_type="hybrid_with_prerequisites",
                 top_k=top_k,
                 start_time=start_time,
                 end_time=time.time(),
@@ -519,7 +666,7 @@ def match_courses_with_resume(
             recommendation_logger.log_recommendation_request(
                 user_id=str(user.id),
                 user_email=user.email,
-                request_type="hybrid",
+                request_type="hybrid_with_prerequisites",
                 top_k=top_k,
                 start_time=start_time,
                 end_time=time.time(),
@@ -645,7 +792,7 @@ def match_courses_semantic_only(
             processing_metrics=processing_metrics,
             system_health=system_health,
             resume_info=resume_info,
-            keyword_analysis={},
+            keyword_analysis=keyword_analysis,
             error_info=error_info
         )
         
@@ -674,7 +821,7 @@ def match_courses_semantic_only(
                 processing_metrics={},
                 system_health=system_health,
                 resume_info=resume_info,
-                keyword_analysis={},
+                keyword_analysis=keyword_analysis,
                 error_info=error_info
             )
         raise e
@@ -699,7 +846,7 @@ def match_courses_semantic_only(
                 processing_metrics={},
                 system_health=system_health,
                 resume_info=resume_info,
-                keyword_analysis={},
+                keyword_analysis=keyword_analysis,
                 error_info=error_info
             )
         raise HTTPException(status_code=500, detail=f"Error matching courses: {str(e)}")
@@ -889,7 +1036,7 @@ def debug_recommendation_system(
         # Test hybrid matching
         hybrid_matches = []
         if resume_text:
-            hybrid_matches = user_service.get_hybrid_course_matches(user.id, 5)
+            hybrid_matches = user_service.get_hybrid_course_matches(user.id, 50)
         
         # Create debug response
         debug_info = {
