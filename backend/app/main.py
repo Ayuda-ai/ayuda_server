@@ -1,8 +1,5 @@
 from fastapi import FastAPI
-from app.api import user, auth, admin, course, neo4j
-from app.db.session import engine
-from app.models import user as user_model
-from app.models import access_code, allowed_domain
+from app.api import user, auth, admin, course, neo4j, recommendations
 from alembic import command
 from alembic.config import Config
 import os
@@ -82,11 +79,14 @@ app.include_router(user.router, prefix="/users", tags=["Users"])
 # Auth router - handles user authentication and JWT token generation
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 
-# Admin router - handles administrative functions like course import
-app.include_router(admin.router, prefix="/admin", tags=["Admin Utilities"])
+# Admin router - handles administrative functions and system management
+app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 
 # Course router - handles course search and retrieval functionality
 app.include_router(course.router, prefix="/courses", tags=["Courses"])
 
 # Neo4j router - handles graph operations and prerequisites management
 app.include_router(neo4j.router, prefix="/neo4j", tags=["Neo4j Graph Operations"])
+
+# Recommendations router - handles course matching and recommendation algorithms
+app.include_router(recommendations.router, prefix="/recommendations", tags=["Recommendations"])
