@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     neo4j_username: Optional[str] = None
     neo4j_password: Optional[str] = None
 
+    # Ollama Configs
+    ollama_address: str = "http://localhost:11434/api/generate"
+    ollama_model: str = "ayuda_llama3"
+
     # Dynamically build DATABASE_URL from individual components
     @property
     def database_url(self) -> str:

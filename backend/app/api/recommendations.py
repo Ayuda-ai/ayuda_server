@@ -10,6 +10,8 @@ Endpoints:
 - GET /recommendations/semantic - Semantic-only course matching
 - GET /recommendations/analytics - Recommendation analytics (admin only)
 - GET /recommendations/debug - Debug recommendation system
+- POST /recommendations/explain - Get reasoning for course recommendation
+- GET /recommendations/llm/health - Check LLM service health
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +24,8 @@ from app.db.session import get_db
 from app.services.user_service import UserService
 from app.services.neo4j_service import Neo4jService
 from app.services.recommendation_service import RecommendationService
+from app.services.llm_service import LLMService
+from app.schemas.reasoning import CourseReasoningRequest, CourseReasoningResponse, LLMHealthResponse
 from app.core.config import settings
 from app.core.dependencies import admin_required
 from app.services.recommendation_logger import RecommendationLogger
@@ -34,10 +38,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 # Initialize services
 recommendation_logger = RecommendationLogger()
+llm_service = LLMService()
 
+# Add cleanup function for LLM service
+async def cleanup_llm_service():
+    """Cleanup LLM service connection pool."""
+    await llm_service.close()
 
 @router.get("/match_courses")
-def get_hybrid_course_recommendations(
+async def get_hybrid_course_recommendations(
     top_k: int = 5,
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
@@ -377,7 +386,7 @@ def get_hybrid_course_recommendations(
 
 
 @router.get("/semantic")
-def get_semantic_course_recommendations(
+async def get_semantic_course_recommendations(
     top_k: int = 5,
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
@@ -552,7 +561,7 @@ def get_semantic_course_recommendations(
 
 
 @router.get("/analytics", dependencies=[Depends(admin_required)])
-def get_recommendation_analytics(
+async def get_recommendation_analytics(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
@@ -682,7 +691,7 @@ def get_recommendation_analytics(
 
 
 @router.get("/debug")
-def debug_recommendation_system(
+async def debug_recommendation_system(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
@@ -788,4 +797,152 @@ def debug_recommendation_system(
         raise
     except Exception as e:
         logger.error(f"Debug generation failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating debug info: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"Error generating debug info: {str(e)}")
+
+
+@router.post("/explain", response_model=CourseReasoningResponse)
+async def explain_course_recommendation(
+    request: CourseReasoningRequest,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed reasoning for why a specific course was recommended to the user.
+    
+    This endpoint provides personalized explanations for course recommendations
+    based on the user's complete profile including resume, work experience,
+    completed courses, and additional skills.
+    
+    Args:
+        request (CourseReasoningRequest): Request containing course ID
+        token (str): JWT access token for user authentication
+        db (Session): Database session dependency
+        
+    Returns:
+        CourseReasoningResponse: Detailed reasoning explanation
+        
+    Raises:
+        HTTPException: If user not found (404), course not found (404),
+                      or reasoning generation fails (500)
+    """
+    logger.info(f"Course reasoning request for course ID: {request.course_id}")
+    
+    try:
+        # Get user information
+        user_service = UserService(db)
+        recommendation_service = RecommendationService(db)
+        neo4j_service = Neo4jService()
+        
+        user = user_service.get_user_by_token(token)
+        
+        # Get user's completed courses
+        completed_courses = user.completed_courses or []
+        
+        # Get user profile data
+        resume_text = user_service.get_resume_text_from_postgresql(user.id)
+        resume_embedding = user_service.get_resume_embedding_from_postgresql(user.id)
+        
+        # Build user profile
+        user_profile = {
+            "resume_text": resume_text or "",
+            "work_experience": "",  # Could be extracted from resume or stored separately
+            "completed_courses": completed_courses,
+            "additional_skills": user.additional_skills or "",
+            "major": user.major,
+            "university": user.university
+        }
+        
+        # Get course information
+        course_info = recommendation_service.get_course_by_id(request.course_id)
+        if not course_info:
+            raise HTTPException(status_code=404, detail="Course not found")
+        
+        # Log course info for debugging
+        logger.debug(f"Course info retrieved: {course_info.get('course_name', 'Unknown')}")
+        logger.debug(f"Course prerequisites: {course_info.get('prerequisites', [])}")
+        logger.debug(f"Course domains: {course_info.get('domains', [])}")
+        logger.debug(f"Course skills: {course_info.get('skills_associated', [])}")
+        
+        # Get recommendation context
+        recommendation_context = {}
+        
+        # Calculate semantic score if resume embedding exists
+        if resume_embedding:
+            try:
+                semantic_matches = recommendation_service.get_semantic_course_matches(
+                    resume_embedding, 50
+                )
+                # Find this specific course in semantic matches
+                for match in semantic_matches:
+                    if match.get("id") == request.course_id:
+                        recommendation_context["semantic_score"] = match.get("score", 0)
+                        break
+            except Exception as e:
+                logger.warning(f"Could not calculate semantic score: {str(e)}")
+                recommendation_context["semantic_score"] = 0
+        
+        # Get keyword matches if resume text exists
+        if resume_text:
+            try:
+                extracted_keywords, matching_keywords = user_service.redis_service.get_keyword_matches(resume_text)
+                recommendation_context["keyword_matches"] = list(matching_keywords)
+            except Exception as e:
+                logger.warning(f"Could not get keyword matches: {str(e)}")
+                recommendation_context["keyword_matches"] = []
+        
+        # Check prerequisites
+        if neo4j_service.is_configured():
+            try:
+                prereq_status = neo4j_service.check_prerequisites_completion(
+                    course_info.get("course_id", ""), completed_courses
+                )
+                recommendation_context["prerequisite_status"] = "eligible" if prereq_status["prerequisites_met"] else "ineligible"
+                recommendation_context["missing_prerequisites"] = [p.get("name", "") for p in prereq_status.get("missing_prerequisites", [])]
+            except Exception as e:
+                logger.warning(f"Could not check prerequisites: {str(e)}")
+                recommendation_context["prerequisite_status"] = "unknown"
+                recommendation_context["missing_prerequisites"] = []
+        else:
+            recommendation_context["prerequisite_status"] = "unknown"
+            recommendation_context["missing_prerequisites"] = []
+        
+        # Get reasoning from LLM
+        reasoning_result = await llm_service.get_course_reasoning(
+            user_profile, course_info, recommendation_context
+        )
+        
+        if not reasoning_result["success"]:
+            logger.error(f"Failed to generate reasoning: {reasoning_result.get('error', 'Unknown error')}")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to generate reasoning: {reasoning_result.get('error', 'Unknown error')}"
+            )
+        
+        logger.info(f"Successfully generated reasoning for course: {course_info.get('course_name', 'Unknown')}")
+        
+        return CourseReasoningResponse(
+            success=True,
+            reasoning=reasoning_result["reasoning"],
+            course_name=course_info.get("course_name", ""),
+            model_used=reasoning_result["model_used"],
+            prompt_length=reasoning_result["prompt_length"],
+            response_length=reasoning_result["response_length"]
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in course reasoning: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/llm/health", response_model=LLMHealthResponse)
+async def check_llm_health():
+    """
+    Check the health and connectivity of the LLM service.
+    
+    Returns:
+        LLMHealthResponse: Health status of the LLM service
+    """
+    health_status = llm_service.test_connection()
+    return LLMHealthResponse(**health_status) 
