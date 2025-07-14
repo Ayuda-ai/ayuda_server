@@ -26,9 +26,15 @@ class Neo4jService:
             return
             
         try:
+            # Configure connection pooling for better performance
             self.driver = GraphDatabase.driver(
                 settings.neo4j_uri,
-                auth=(settings.neo4j_username, settings.neo4j_password)
+                auth=(settings.neo4j_username, settings.neo4j_password),
+                max_connection_lifetime=3600,  # 1 hour
+                max_connection_pool_size=50,   # Increased pool size
+                connection_acquisition_timeout=60,  # 60 seconds timeout
+                connection_timeout=30,  # 30 seconds connection timeout
+                max_transaction_retry_time=15  # 15 seconds retry timeout
             )
             # Test connection
             with self.driver.session() as session:
@@ -41,21 +47,27 @@ class Neo4jService:
     def close(self):
         """Close the Neo4j driver connection."""
         if self.driver:
-            self.driver.close()
+            try:
+                self.driver.close()
+                logger.debug("Neo4j connection closed successfully")
+            except Exception as e:
+                logger.debug(f"Error closing Neo4j connection: {str(e)}")
     
     def is_configured(self) -> bool:
         """Check if Neo4j is properly configured."""
         return self.driver is not None
     
     def test_connection(self) -> bool:
-        """Test Neo4j connection."""
+        """Test Neo4j connection with timeout."""
         if not self.is_configured():
             return False
             
         try:
+            # Use a shorter timeout for connection testing
             with self.driver.session() as session:
                 result = session.run("RETURN 1 as test")
-                return result.single()["test"] == 1
+                test_result = result.single()
+                return test_result and test_result["test"] == 1
         except Exception as e:
             logger.error(f"Neo4j connection test failed: {str(e)}")
             return False

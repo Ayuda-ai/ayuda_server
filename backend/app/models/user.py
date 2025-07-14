@@ -1,6 +1,7 @@
 from sqlalchemy import Column, String, Date, Text, TIMESTAMP, JSON, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 import uuid
 from app.db.session import Base
 
@@ -22,3 +23,9 @@ class User(Base):
     additional_skills = Column(Text, nullable=True)  # Store additional skills/interests as text
     profile_enhanced = Column(Boolean, nullable=False, server_default='false')  # Track if profile has been enhanced
     created_at = Column(TIMESTAMP, server_default=func.now())
+    
+    # Relationship to recommendations - using string reference to avoid circular import
+    recommendations = relationship("Recommendation", back_populates="user", lazy="dynamic")
+    
+    def __repr__(self):
+        return f"<User(id={self.id}, email={self.email})>"
