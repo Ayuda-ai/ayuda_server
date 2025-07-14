@@ -21,7 +21,9 @@ This repository contains backend code for Ayuda - an AI-powered course recommend
 - [Configuration](#configuration)
 - [Running the Application](#running-the-application)
 - [Performance Optimizations](#performance-optimizations)
+- [Concurrency Mechanisms in Ayuda](#concurrency-mechanism-in-ayuda)
 - [Monitoring & Logging](#monitoring--logging)
+- [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -30,16 +32,16 @@ Ayuda is a sophisticated course recommendation system that leverages AI and mach
 ## High-Level Design (HLD)
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   Mobile App    │    │   Third-party   │
-│   (React/Vue)   │    │   (React Native)│    │   Integrations  │
-└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
-          │                      │                      │
-          └──────────────────────┼──────────────────────┘
+┌─────────────────┐                           ┌─────────────────┐
+│   Frontend      │                           │   Third-party   │
+│   (React)       │                           │      Clients    │
+└─────────┬───────┘                           └─────────┬───────┘
+          │                                             │
+          └─────────────────────────────────────────────┘
                                  │
                     ┌─────────────▼─────────────┐
-                    │    FastAPI Backend       │
-                    │   (Ayuda_Server)         │
+                    │      FastAPI Backend      │
+                    │      (Ayuda_Server)       │
                     └─────────────┬─────────────┘
                                   │
           ┌───────────────────────┼───────────────────────┐
@@ -52,12 +54,12 @@ Ayuda is a sophisticated course recommendation system that leverages AI and mach
           └───────────────────────┼───────────────────────┘
                                   │
                     ┌─────────────▼─────────────┐
-                    │      Neo4j Graph         │
-                    │   (Prerequisites)        │
+                    │      Neo4j Graph          │
+                    │   (Prerequisites)         │
                     └───────────────────────────┘
                                   │
                     ┌─────────────▼─────────────┐
-                    │      Ollama LLM          │
+                    │      Ollama LLM           │
                     │   (Reasoning Engine)      │
                     └───────────────────────────┘
 ```
@@ -79,47 +81,56 @@ Ayuda is a sophisticated course recommendation system that leverages AI and mach
 ### Service Architecture:
 
 ```
-app/
-├── api/                    # API endpoints
-│   ├── auth.py            # Authentication endpoints
-│   ├── user.py            # User management endpoints
-│   ├── admin.py           # Admin operations endpoints
-│   ├── course.py          # Course search endpoints
-│   ├── recommendations.py # Recommendation endpoints
-│   └── neo4j.py          # Graph operations endpoints
-├── services/              # Business logic services
-│   ├── user_service.py    # User operations
-│   ├── admin_service.py   # Admin operations
-│   ├── course_service.py  # Course operations
-│   ├── recommendation_service.py # Recommendation engine
-│   ├── neo4j_service.py  # Graph database operations
-│   ├── redis_service.py   # Caching operations
-│   ├── llm_service.py    # LLM reasoning
-│   └── recommendation_logger.py # Analytics logging
-├── models/                # Database models
-├── schemas/               # Pydantic schemas
-├── core/                  # Core configurations
-└── db/                    # Database configurations
+backend/
+├── app/
+│   ├── api/                                  # API endpoints
+│   │   ├── auth.py                           # Authentication endpoints
+│   │   ├── user.py                           # User management endpoints
+│   │   ├── admin.py                          # Admin operations endpoints
+│   │   ├── course.py                         # Course search endpoints
+│   │   ├── recommendations.py                # Recommendation endpoints
+│   │   └── neo4j.py                          # Graph operations endpoints
+│   ├── services/                             # Business logic services
+│   │   ├── user_service.py                   # User operations
+│   │   ├── admin_service.py                  # Admin operations
+│   │   ├── course_service.py                 # Course operations
+│   │   ├── course_search_service.py          # Course search operations
+│   │   ├── recommendation_service.py         # Recommendation engine
+│   │   ├── neo4j_service.py                  # Graph database operations
+│   │   ├── redis_service.py                  # Caching operations
+│   │   ├── llm_service.py                    # LLM reasoning
+│   │   └── recommendation_logger.py          # Analytics logging
+│   ├── models/                               # Database models
+│   ├── schemas/                              # Pydantic schemas
+│   ├── core/                                 # Core configurations
+│   └── db/                                   # Database configurations
+├── alembic/                                  # Database migrations
+├── tests/                                    # Test files
+├── logs/                                     # Application logs
+├── docker-compose.yml                        # Docker services configuration
+├── requirements.txt                          # Python dependencies
+└── start_server.sh                           # Server startup script
 ```
 
 ### Data Flow:
 
 1. **User Registration/Login** → JWT Token → Authenticated Requests
-2. **Resume Upload** → Text Extraction → Embedding Generation → Storage
+2. **Resume Upload** → Text Extraction → Embedding Generation → Storage (PostgreSQL + Pinecone)
 3. **Course Recommendation** → Profile Analysis → Semantic Search → Prerequisite Check → LLM Reasoning
-4. **Admin Operations** → System Management → Analytics → Data Sync
+4. **Admin Operations** → Data Population System → Management → Analytics → Data Sync
 
 ## Architecture
 
 ### Technology Stack:
 
-- **Framework**: FastAPI (Python)
-- **Database**: PostgreSQL (Primary), Redis (Caching), Neo4j (Graph), Pinecone (Vector)
+- **Framework**: FastAPI (Python 3.11+)
+- **Database**: PostgreSQL 17 (Primary), Redis 7 (Caching), Neo4j 5+ (Graph), Pinecone (Vector)
 - **Authentication**: JWT with bcrypt
 - **AI/ML**: Sentence Transformers, Scikit-learn, Ollama LLM
 - **File Processing**: PyMuPDF, python-docx
 - **Async Support**: httpx, asyncio
 - **Monitoring**: Custom logging with JSON structured logs
+- **Migration**: Alembic for database schema management
 
 ### Performance Features:
 
@@ -141,7 +152,8 @@ app/
 5. **RedisService**: Caching and keyword matching
 6. **LLMService**: AI-powered reasoning for recommendations
 7. **CourseService**: Course management and search
-8. **RecommendationLogger**: Analytics and performance monitoring
+8. **CourseSearchService**: Advanced course search functionality
+9. **RecommendationLogger**: Analytics and performance monitoring
 
 ### Key Functionalities:
 
@@ -165,31 +177,32 @@ app/
 
 | Endpoint | Method | Description | Access |
 |----------|--------|-------------|---------|
-| `/users/signup` | POST | User registration | **USER** |
+| `/users/signup` | POST | User registration with access code validation | **USER** |
 | `/users/me` | GET | Get current user profile | **USER** |
-| `/users/resume` | POST | Upload and process resume | **USER** |
-| `/users/resume/embed` | POST | Generate resume embeddings | **USER** |
+| `/users/resume/embed` | POST | Upload resume and generate embeddings | **USER** |
 | `/users/resume/embedding` | GET | Get resume embedding | **USER** |
+| `/users/resume/embedding` | DELETE | Delete resume embedding | **USER** |
+| `/users/resume` | POST | Smart resume upload/update | **USER** |
+| `/users/resume` | GET | Get resume information | **USER** |
 | `/users/resume` | DELETE | Delete resume data | **USER** |
 | `/users/profile/completed-courses` | GET/POST/PUT/DELETE | Manage completed courses | **USER** |
 | `/users/profile/additional-skills` | GET/PUT | Manage additional skills | **USER** |
 | `/users/profile/enhancement-status` | GET | Get profile enhancement status | **USER** |
-| `/users/profile/enhance` | POST | Enhance user profile | **USER** |
+| `/users/profile/enhance` | POST | Complete profile enhancement | **USER** |
 
 ### Course Management
 
 | Endpoint | Method | Description | Access |
 |----------|--------|-------------|---------|
-| `/courses/search` | GET | Search courses with filters | **USER** |
-| `/courses/search/{course_id}` | GET | Get specific course details | **USER** |
-| `/courses/major/{major}` | GET | Get courses by major | **USER** |
+| `/courses/search` | GET | Search courses with filters and prerequisites | **USER** |
+| `/courses/major/{major}` | GET | Get courses by major (CSYE, INFO, DAMG) | **USER** |
 
 ### Recommendations
 
 | Endpoint | Method | Description | Access |
 |----------|--------|-------------|---------|
-| `/recommendations/match_courses` | GET | Hybrid course recommendations | **USER** |
-| `/recommendations/semantic` | GET | Semantic-only recommendations | **USER** |
+| `/recommendations/match_courses` | GET | Hybrid course recommendations with prerequisites | **USER** |
+| `/recommendations/semantic` | GET | Semantic-only course recommendations | **USER** |
 | `/recommendations/explain` | POST | Get reasoning for course recommendation | **USER** |
 | `/recommendations/debug` | GET | Debug recommendation system | **USER** |
 | `/recommendations/analytics` | GET | Recommendation analytics | **ADMIN** |
@@ -206,9 +219,7 @@ app/
 | `/admin/system/stats` | GET | System statistics | **ADMIN** |
 | `/admin/system/sync/neo4j` | POST | Sync data to Neo4j | **ADMIN** |
 | `/admin/system/sync/pinecone` | POST | Sync data to Pinecone | **ADMIN** |
-| `/admin/system/backup` | POST | Create system backup | **ADMIN** |
-| `/admin/system/restore` | POST | Restore system from backup | **ADMIN** |
-| `/admin/parse_courses` | POST | Parse course data | **ADMIN** |
+| `/admin/parse_courses` | POST | Parse course data from Excel/CSV | **ADMIN** |
 
 ### Neo4j Graph Operations
 
@@ -226,81 +237,215 @@ app/
 
 ## Local Dev Environment Setup
 
-- Install Python 3.11.2 and MongoDB
-- Install all the Python packages used in this project using `pip install requirements.txt`
-- Create a `db.ini` file in the root directory (where run.py exists). Use `db.ini.txt` file for the reference to create the `db.ini` file
-- Refer this [link](https://www.prisma.io/dataguide/mongodb/connection-uris#:~:text=A%20quick%20description%20of%20each,username%20%3A%20An%20optional%20username.) to know the format of a standard MongoDB URI that needs to be put in the `db.ini`
-- BASE_URL is url where you need the backend Flask server to run.It can be `http://127.0.0.1:5000`
-- Once done with the above setup, start the server by `python run.py` command
-
-## Installation
-
 ### Prerequisites
 
-- Python 3.11.2+
-- PostgreSQL 12+
-- Redis 6+
-- Neo4j 5+
-- Ollama (for LLM reasoning)
+Before setting up the development environment, ensure you have the following installed:
 
-### Quick Start
+- **Python 3.11+**: Download from [python.org](https://www.python.org/downloads/)
+- **Docker & Docker Compose**: Download from [docker.com](https://www.docker.com/products/docker-desktop/)
+- **Git**: For version control
+
+### Technologies Used
+
+The Ayuda backend uses the following technologies:
+
+1. **FastAPI**: Modern Python web framework for building APIs
+2. **PostgreSQL 17**: Primary relational database for user data and course information
+3. **Redis 7**: In-memory cache for session storage and keyword matching
+4. **Neo4j 5+**: Graph database for prerequisite relationships
+5. **Pinecone**: Vector database for semantic similarity search
+6. **Ollama**: Local LLM for reasoning and explanations
+7. **Alembic**: Database migration tool
+8. **Sentence Transformers**: For generating embeddings
+9. **PyMuPDF & python-docx**: For resume file processing
+
+### Setup Instructions
+
+#### 1. Clone and Navigate to Project
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd ayuda_server/backend
+```
 
+#### 2. Set Up Python Environment
+
+```bash
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your configuration
-
-# Run migrations
-alembic upgrade head
-
-# Start the server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+#### 3. Start External Services with Docker Compose
+
+The project includes a `docker-compose.yml` file that sets up PostgreSQL and Redis:
+
+```bash
+# Start PostgreSQL and Redis containers
+docker-compose up -d
+
+# Verify services are running
+docker-compose ps
+```
+
+This will start:
+- **PostgreSQL 17** on port 5432
+- **Redis 7** on port 6379
+
+#### 4. Configure Environment Variables
+
+Create a `.env` file in the `backend` directory:
+
+```env
+# Database Configuration
+POSTGRES_DB=ayuda_db
+POSTGRES_USER=ayuda_user
+POSTGRES_PASSWORD=ayuda_password
+DATABASE_HOST=localhost
+DATABASE_PORT=5432
+
+# JWT Configuration
+JWT_SECRET_KEY=your_super_secret_jwt_key_here
+ACCESS_TOKEN_EXPIRE_MINUTES=10080
+
+# Pinecone Configuration
+PINECONE_API_KEY=your_pinecone_api_key
+PINECONE_ENV=your_pinecone_environment
+PINECONE_INDEX=your_pinecone_index_name
+
+# Neo4j Configuration (Optional)
+NEO4J_URI=your_neo4j_uri
+NEO4J_USERNAME=your_neo4j_username
+NEO4J_PASSWORD=your_neo4j_password
+
+# Ollama Configuration
+OLLAMA_ADDRESS=http://localhost:11434/api/generate
+OLLAMA_MODEL=ayuda_llama3
+
+# Redis Configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+```
+
+#### 5. Run Database Migrations
+
+```bash
+# Run migrations to set up database schema
+./run_migrations.sh
+```
+
+#### 6. Start the Application
+
+```bash
+# Start the server in development mode
+./start_server.sh
+
+# Or for faster startup (skips migrations)
+./start_server_fast.sh
+```
+
+The server will be available at:
+- **API Server**: http://localhost:8000
+- **Interactive API Docs**: http://localhost:8000/docs
+- **Alternative API Docs**: http://localhost:8000/redoc
+
+### Additional Setup (Optional)
+
+#### Neo4j Setup
+
+If you want to use Neo4j for prerequisite checking:
+
+1. Install Neo4j Desktop or use Neo4j AuraDB
+2. Update the Neo4j configuration in your `.env` file
+3. Run the Neo4j sync endpoint: `POST /admin/system/sync/neo4j`
+
+#### Ollama Setup
+
+For LLM reasoning capabilities:
+
+1. Install Ollama from [ollama.ai](https://ollama.ai/)
+2. Pull the required model: `ollama pull llama3`
+3. Ensure Ollama is running on `http://localhost:11434`
+
+#### Pinecone Setup
+
+For semantic search functionality:
+
+1. Create a Pinecone account at [pinecone.io](https://pinecone.io/)
+2. Create an index with dimension 384
+3. Update the Pinecone configuration in your `.env` file
+
+## Installation
+
+### Production Deployment
+
+For production deployment, you can use the provided Dockerfile:
+
+```bash
+# Build the Docker image
+docker build -t ayuda-backend .
+
+# Run the container
+docker run -p 8000:8000 ayuda-backend
+```
+
+### Environment-Specific Configurations
+
+- **Development**: Uses `start_server.sh` with auto-reload
+- **Production**: Uses `uvicorn` with multiple workers
+- **Testing**: Uses `pytest` for unit and integration tests
 
 ## Configuration
 
 ### Environment Variables
 
-Create a `.env` file with the following variables:
+The application uses the following environment variables:
 
 ```env
-# Database Connection
-POSTGRES_DB=db_name
-POSTGRES_USER=db_user
-POSTGRES_PASSWORD=db_password
+# Required for all environments
+POSTGRES_DB=ayuda_db
+POSTGRES_USER=ayuda_user
+POSTGRES_PASSWORD=ayuda_password
 DATABASE_HOST=localhost
 DATABASE_PORT=5432
+JWT_SECRET_KEY=your_secret_key
+PINECONE_API_KEY=your_pinecone_key
+PINECONE_ENV=your_pinecone_env
+PINECONE_INDEX=your_index_name
 
-# JWT Configs
-JWT_SECRET_KEY=enter_jwt_secret_key_here
-ACCESS_TOKEN_EXPIRE_MINUTES=10080
-
-# Pinecone Credentials
-PINECONE_API_KEY=pinecone_api_key_here
-PINECONE_ENV=pinecone_env
-PINECONE_INDEX=index_name
-
-# Neo4j Credentials
-NEO4J_URI=neo4j_uri
-NEO4J_USERNAME=neo4j_username
-NEO4J_PASSWORD=neo4j_password
-AURA_INSTANCEID=neo4j_instance_id
-AURA_INSTANCENAME=neo4j_instance_name
-
-# Ollama Connection
+# Optional (for advanced features)
+NEO4J_URI=your_neo4j_uri
+NEO4J_USERNAME=your_neo4j_username
+NEO4J_PASSWORD=your_neo4j_password
 OLLAMA_ADDRESS=http://localhost:11434/api/generate
-OLLAMA_MODEL=model_name
+OLLAMA_MODEL=ayuda_llama3
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+```
+
+### Database Configuration
+
+The application uses Alembic for database migrations:
+
+```bash
+# Create a new migration
+alembic revision --autogenerate -m "Description of changes"
+
+# Apply migrations
+alembic upgrade head
+
+# Rollback migrations
+alembic downgrade -1
 ```
 
 ## Running the Application
@@ -308,54 +453,192 @@ OLLAMA_MODEL=model_name
 ### Development Mode
 
 ```bash
-# Start with auto-reload
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Standard development server
+./start_server.sh
 
-# Or use the provided script
-./start_server.sh  # Linux/Mac
-start_server.bat   # Windows
+# Fast development server (skips migrations)
+./start_server_fast.sh
+
+# Windows users
+start_server.bat
 ```
 
 ### Production Mode
 
 ```bash
-# Using Docker
+# Using Docker Compose (includes all services)
 docker-compose up -d
 
-# Or directly
+# Direct uvicorn with multiple workers
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-### API Documentation
+### Health Checks
 
-Once running, access the interactive API documentation at:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+Verify the application is running correctly:
+
+```bash
+# Check API health
+curl http://localhost:8000/admin/system/health
+
+# Check LLM service
+curl http://localhost:8000/recommendations/llm/health
+
+# Check Neo4j connection
+curl http://localhost:8000/neo4j/health
+```
 
 ## Performance Optimizations
 
 ### Async Programming
 
 The application uses async programming for:
-- Database operations
+- Database operations with SQLAlchemy async
 - External API calls (Pinecone, Redis, Neo4j)
-- File processing
-- LLM reasoning
+- File processing operations
+- LLM reasoning with Ollama
 
 ### Caching Strategy
 
 - **Redis**: Session storage, keyword matching, response caching
-- **Asynchronous Processing**: Asynchronous API calls
+- **Connection Pooling**: Optimized database connections
+- **Asynchronous Processing**: Concurrent API calls
 
 ### Expected Performance
 
-- **Response Time**: 2-4 seconds (optimized from 10+ seconds)
+- **Response Time**: 2-4 seconds for recommendations
 - **Concurrent Users**: 100+ simultaneous users
 - **Recommendation Accuracy**: 85%+ relevance score
+- **Database Queries**: Optimized with proper indexing  
+
+## Concurrency Mechanisms in Ayuda
+**1. FastAPI Async Framework**  
+The project uses FastAPI as the core framework, which is built on ASGI (Asynchronous Server Gateway Interface) and provides:  
+*Non-blocking I/O:* All database operations, external API calls, and file processing are asynchronous
+Event-driven architecture: Uses Python's **asyncio** for handling multiple concurrent requests  
+*Automatic connection pooling:* **FastAPI** manages connection pools efficiently  
+
+**2. Database Connection Pooling**  
+```python
+# PostgreSQL Connection Pool (SQLAlchemy)
+engine = create_engine(settings.database_url, echo=True, connect_args={"options": "-c client_encoding=utf8"})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Dependency injection for database sessions
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```  
+
+**Key Features:**  
+*Session per request:* Each API request gets its own database session  
+*Automatic cleanup:* Sessions are properly closed after each request  
+*Connection reuse:* SQLAlchemy's connection pool reuses database connections  
+
+**3. External Service Connection Pools**  
+*Neo4j Connection Pooling*  
+```python
+self.driver = GraphDatabase.driver(
+    settings.neo4j_uri,
+    auth=(settings.neo4j_username, settings.neo4j_password),
+    max_connection_lifetime=3600,  # 1 hour
+    max_connection_pool_size=50,   # Increased pool size
+    connection_acquisition_timeout=60,  # 60 seconds timeout
+    connection_timeout=30,  # 30 seconds connection timeout
+    max_transaction_retry_time=15  # 15 seconds retry timeout
+)
+```  
+
+*HTTP Client Pooling (httpx)*  
+```python
+async with httpx.AsyncClient(
+    timeout=httpx.Timeout(
+        connect=5.0,    # 5 seconds to establish connection
+        read=self.timeout,  # Use configured timeout for reading
+        write=10.0,     # 10 seconds to write request
+        pool=30.0       # 30 seconds pool timeout
+    )
+) as client:
+    response = await client.post(...)
+```  
+
+**4. Async/Await Pattern Throughout**  
+The entire codebase uses async/await patterns:  
+
+```python  
+@router.get("/match_courses")
+async def get_hybrid_course_recommendations(
+    top_k: int = 5,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    # All operations are async
+    user = user_service.get_user_by_token(token)
+    enhanced_matches = recommendation_service.get_hybrid_course_matches(user.id, top_k * 2)
+    # ... more async operations
+```  
+
+**5. Lazy Loading for Heavy Resources**  
+```python
+# Global variables for lazy loading
+_pinecone_pc = None
+_pinecone_index = None
+_embedding_model = None
+
+def get_pinecone_connection():
+    """Lazy load Pinecone connection"""
+    global _pinecone_pc, _pinecone_index
+    
+    if _pinecone_pc is None:
+        try:
+            _pinecone_pc = Pinecone(api_key=settings.pinecone_api_key)
+            _pinecone_index = _pinecone_pc.Index(settings.pinecone_index)
+```  
+
+**6. Redis for Caching and Session Management**  
+```python
+self.redis_client = redis.Redis(
+    host=settings.redis_host,
+    port=settings.redis_port,
+    db=settings.redis_db,
+    decode_responses=True
+)
+```  
+**Benefits:**    
+*Session storage:* Reduces database load  
+*Keyword matching:* Fast in-memory operations  
+*Response caching:* Reduces computation time  
+
+**7. Timeout Management**  
+The project implements comprehensive timeout handling:  
+```python
+# LLM Service timeouts
+timeout=httpx.Timeout(
+    connect=5.0,    # 5 seconds to establish connection
+    read=15.0,      # 15 seconds to read response
+    write=10.0,     # 10 seconds to write request
+    pool=30.0       # 30 seconds pool timeout
+)
+```
+
+**8. Error Handling and Graceful Degradation**  
+```python
+# Graceful handling of service failures
+try:
+    neo4j_service = Neo4jService()
+    if neo4j_service.is_configured():
+        neo4j_service.test_connection()
+except Exception as e:
+    logger.warning(f"Neo4j service initialization failed: {str(e)}")
+    neo4j_service = None
+```
 
 ## Monitoring & Logging
 
-### Logging
+### Logging Configuration
 
 - **Structured Logging**: JSON format for easy parsing
 - **Performance Metrics**: Response times, database queries
@@ -364,15 +647,39 @@ The application uses async programming for:
 
 ### Health Checks
 
-- `/admin/system/health` - System health status
+- `/admin/system/health` - Comprehensive system health status
 - `/recommendations/llm/health` - LLM service status
 - `/neo4j/health` - Neo4j connection status
 
-### Metrics
+### Metrics and Analytics
 
 - User engagement analytics
 - Recommendation accuracy metrics
 - System performance monitoring
 - Error rate tracking
+- Database query performance
+
+### Log Files
+
+Logs are stored in the `logs/` directory with the following structure:
+- `app.log` - Application logs
+- `error.log` - Error logs
+- `performance.log` - Performance metrics
 
 ---
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Database Connection Errors**: Ensure PostgreSQL is running and credentials are correct
+2. **Redis Connection Issues**: Verify Redis is running on the correct port
+3. **Migration Errors**: Run `./run_migrations.sh` to ensure database schema is up to date
+4. **Import Errors**: Ensure virtual environment is activated and dependencies are installed
+
+### Getting Help
+
+- Check the logs in the `logs/` directory
+- Use the health check endpoints to diagnose issues
+- Review the API documentation at `http://localhost:8000/docs`
+- Check the system statistics at `/admin/system/stats`
