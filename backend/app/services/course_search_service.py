@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, or_, and_, case
 from app.models.course import Course
@@ -28,7 +28,7 @@ class CourseSearchService:
         limit: int = 10, 
         offset: int = 0,
         major_filter: Optional[str] = None
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Perform fuzzy search across course_id, course_name, and course_description.
         
@@ -222,7 +222,7 @@ class CourseSearchService:
         
         return formatted_results
     
-    def _empty_result(self) -> Dict[str, any]:
+    def _empty_result(self) -> Dict[str, Any]:
         """
         Return empty search result structure.
         """

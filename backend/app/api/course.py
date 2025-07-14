@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/search")
 def search_courses(
     q: str = Query(..., description="Search query string", min_length=1, max_length=200),
-    limit: int = Query(10, description="Maximum number of results to return", ge=1, le=100),
+    limit: int = Query(5, description="Maximum number of results to return", ge=1, le=100),
     offset: int = Query(0, description="Number of results to skip for pagination", ge=0),
     major: Optional[str] = Query(None, description="Filter results by major (CSYE, INFO, DAMG)"),
     check_prerequisites: bool = Query(True, description="Check prerequisites for course eligibility"),

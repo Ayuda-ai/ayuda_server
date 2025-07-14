@@ -351,6 +351,142 @@ class UserService:
                 detail=f"Error generating resume embedding: {str(e)}"
             )
 
+    def create_additional_skills_embedding(self, additional_skills: str) -> list:
+        """
+        Generate embedding vector from additional skills text using SentenceTransformer model.
+        
+        This method takes additional skills text and converts it into a 384-dimensional
+        embedding vector using the 'all-MiniLM-L6-v2' model. The embedding
+        can be combined with resume embeddings for enhanced course matching.
+        
+        Args:
+            additional_skills (str): Additional skills text from user profile
+            
+        Returns:
+            list: 384-dimensional embedding vector as a list of floats, or None if no skills provided
+            
+        Raises:
+            HTTPException: If embedding generation fails (status_code=500)
+        """
+        logger.info("Starting additional skills embedding generation")
+        start_time = time.time()
+        
+        try:
+            # Check if additional skills are provided
+            if not additional_skills or not additional_skills.strip():
+                logger.debug("No additional skills provided for embedding")
+                return None
+            
+            # Clean and normalize text
+            cleaned_text = additional_skills.strip()
+            if len(cleaned_text) < 5:  # Minimum meaningful text length for skills
+                logger.debug(f"Additional skills text too short for meaningful embedding: {len(cleaned_text)} chars")
+                return None
+            
+            logger.debug(f"Generating embedding for additional skills of length: {len(cleaned_text)} chars")
+            
+            # Generate embedding
+            embedding = get_embedding_model().encode(cleaned_text).tolist()
+            generation_time = time.time() - start_time
+            
+            # Validate embedding
+            if len(embedding) != 384:
+                logger.error(f"Generated additional skills embedding has incorrect dimensions: {len(embedding)} (expected 384)")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Generated additional skills embedding has incorrect dimensions: {len(embedding)} (expected 384)"
+                )
+            
+            # Check for NaN or infinite values
+            if any(np.isnan(val) or np.isinf(val) for val in embedding):
+                logger.error("Generated additional skills embedding contains invalid values (NaN or infinite)")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Generated additional skills embedding contains invalid values (NaN or infinite)"
+                )
+            
+            logger.info(f"Additional skills embedding generated successfully. Dimensions: {len(embedding)}, Time: {generation_time:.2f}s")
+            return embedding
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error generating additional skills embedding: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error generating additional skills embedding: {str(e)}"
+            )
+
+    def create_enhanced_user_embedding(self, user_id: str, resume_weight: float = 0.7, skills_weight: float = 0.3) -> list:
+        """
+        Create an enhanced user embedding by combining resume and additional skills embeddings.
+        
+        This method retrieves the user's resume embedding and additional skills embedding,
+        then combines them using weighted averaging to create a comprehensive user profile
+        for better course matching.
+        
+        Args:
+            user_id (str): User ID to get embeddings for
+            resume_weight (float): Weight for resume embedding (default: 0.7)
+            skills_weight (float): Weight for additional skills embedding (default: 0.3)
+            
+        Returns:
+            list: 384-dimensional enhanced embedding vector as a list of floats
+            
+        Raises:
+            HTTPException: If no resume embedding exists (status_code=404) or combination fails (status_code=500)
+        """
+        logger.info(f"Creating enhanced user embedding for user: {user_id}")
+        start_time = time.time()
+        
+        try:
+            # Get user object to access additional skills
+            user = self.db.query(User).filter(User.id == user_id).first()
+            if not user:
+                logger.error(f"User not found: {user_id}")
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Get resume embedding
+            resume_embedding = self.get_resume_embedding_from_postgresql(user_id)
+            if not resume_embedding:
+                logger.warning(f"No resume embedding found for user: {user_id}")
+                raise HTTPException(status_code=404, detail="No resume embedding found for user")
+            
+            # Get additional skills embedding
+            additional_skills = user.additional_skills or ""
+            skills_embedding = self.create_additional_skills_embedding(additional_skills)
+            
+            # If no additional skills, return resume embedding as is
+            if not skills_embedding:
+                logger.info(f"No additional skills embedding available for user: {user_id}, using resume embedding only")
+                return resume_embedding
+            
+            # Combine embeddings using weighted averaging
+            enhanced_embedding = []
+            for i in range(len(resume_embedding)):
+                combined_value = (resume_embedding[i] * resume_weight) + (skills_embedding[i] * skills_weight)
+                enhanced_embedding.append(combined_value)
+            
+            # Normalize the combined embedding
+            embedding_norm = np.linalg.norm(enhanced_embedding)
+            if embedding_norm > 0:
+                enhanced_embedding = [val / embedding_norm for val in enhanced_embedding]
+            
+            combination_time = time.time() - start_time
+            logger.info(f"Enhanced user embedding created successfully. Dimensions: {len(enhanced_embedding)}, Time: {combination_time:.2f}s")
+            logger.debug(f"Used weights - Resume: {resume_weight}, Skills: {skills_weight}")
+            
+            return enhanced_embedding
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error creating enhanced user embedding: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error creating enhanced user embedding: {str(e)}"
+            )
+
     def store_resume_embedding_pinecone(self, user_id: str, embedding: list, user: User) -> bool:
         """
         Store resume embedding vector in Pinecone with user metadata.
@@ -746,18 +882,41 @@ class UserService:
         """
         logger.info(f"Updating profile enhancement status for user {user_id}: {enhanced}")
         try:
+            # Debug: Log the user_id type and value
+            logger.debug(f"User ID type: {type(user_id)}, value: {user_id}")
+            
             user = self.db.query(User).filter(User.id == user_id).first()
+            
             if user:
+                logger.debug(f"User found: {user.id}, current profile_enhanced: {user.profile_enhanced}")
+                
+                # Update the field
                 user.profile_enhanced = enhanced
-                user.updated_at = datetime.utcnow()
+                logger.debug(f"Set profile_enhanced to: {enhanced}")
+                
+                # Commit the change
                 self.db.commit()
                 logger.info(f"Profile enhancement status updated successfully for user: {user_id}")
+                
+                # Verify the update by refreshing the user object
+                self.db.refresh(user)
+                logger.debug(f"After commit - profile_enhanced: {user.profile_enhanced}")
+                
                 return True
-            logger.warning(f"User not found for profile enhancement update: {user_id}")
-            return False
+            else:
+                logger.warning(f"User not found for profile enhancement update: {user_id}")
+                # Debug: Let's see what users exist
+                all_users = self.db.query(User).all()
+                logger.debug(f"Total users in database: {len(all_users)}")
+                for u in all_users[:5]:  # Log first 5 users
+                    logger.debug(f"User: {u.id} - {u.email} - profile_enhanced: {u.profile_enhanced}")
+                return False
         except Exception as e:
             self.db.rollback()
             logger.error(f"Error updating profile enhancement status: {str(e)}")
+            logger.error(f"Exception type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
 
     def get_all_courses(self) -> list:

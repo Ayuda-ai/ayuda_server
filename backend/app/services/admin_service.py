@@ -85,8 +85,7 @@ class AdminService:
                     "profile_enhanced": user.profile_enhanced,
                     "completed_courses": user.completed_courses or [],
                     "additional_skills": user.additional_skills,
-                    "created_at": user.created_at,
-                    "updated_at": user.updated_at
+                    "created_at": user.created_at
                 }
                 user_list.append(user_data)
             
@@ -125,8 +124,7 @@ class AdminService:
                 "profile_enhanced": user.profile_enhanced,
                 "completed_courses": user.completed_courses or [],
                 "additional_skills": user.additional_skills,
-                "created_at": user.created_at,
-                "updated_at": user.updated_at
+                "created_at": user.created_at
             }
             
             logger.info(f"Retrieved user {user_id} for admin")
@@ -164,7 +162,6 @@ class AdminService:
                 if field in allowed_fields and hasattr(user, field):
                     setattr(user, field, value)
             
-            user.updated_at = datetime.utcnow()
             self.db.commit()
             
             # Return updated user data
@@ -671,8 +668,7 @@ class AdminService:
                         "profile_enhanced": user.profile_enhanced,
                         "completed_courses": user.completed_courses,
                         "additional_skills": user.additional_skills,
-                        "created_at": user.created_at.isoformat(),
-                        "updated_at": user.updated_at.isoformat() if user.updated_at else None
+                        "created_at": user.created_at.isoformat()
                     }
                     for user in users
                 ],

@@ -17,7 +17,7 @@ class LLMService:
         """Initialize LLM service with Ollama configuration."""
         self.ollama_url = settings.ollama_address
         self.model_name = settings.ollama_model
-        self.timeout = 30  # 30 seconds timeout
+        self.timeout = 15  # Reduced timeout to 15 seconds for better responsiveness
         
     def _build_reasoning_prompt(self, user_profile: Dict[str, Any], course_info: Dict[str, Any], recommendation_context: Dict[str, Any]) -> str:
         """
@@ -174,8 +174,15 @@ Write a clear, personalized explanation that helps you understand why this cours
                 "stream": False
             }
             
-            # Make request to Ollama
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # Make request to Ollama with improved timeout handling
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=5.0,    # 5 seconds to establish connection
+                    read=self.timeout,  # Use configured timeout for reading
+                    write=10.0,     # 10 seconds to write request
+                    pool=30.0       # 30 seconds pool timeout
+                )
+            ) as client:
                 response = await client.post(
                     self.ollama_url,
                     json=payload,
@@ -211,6 +218,13 @@ Write a clear, personalized explanation that helps you understand why this cours
                 "error": "Request timeout",
                 "reasoning": "Unable to generate reasoning due to timeout."
             }
+        except httpx.ConnectError:
+            logger.error("Connection error while calling Ollama API")
+            return {
+                "success": False,
+                "error": "Connection failed",
+                "reasoning": "Unable to connect to reasoning service."
+            }
         except Exception as e:
             logger.error(f"Error calling Ollama API: {str(e)}")
             return {
@@ -219,7 +233,7 @@ Write a clear, personalized explanation that helps you understand why this cours
                 "reasoning": "Unable to generate reasoning at this time."
             }
     
-    def test_connection(self) -> Dict[str, Any]:
+    async def test_connection(self) -> Dict[str, Any]:
         """
         Test the connection to Ollama API.
         
@@ -227,8 +241,6 @@ Write a clear, personalized explanation that helps you understand why this cours
             Dict[str, Any]: Connection test results
         """
         try:
-            import asyncio
-            
             # Simple test prompt
             test_payload = {
                 "model": self.model_name,
@@ -236,36 +248,58 @@ Write a clear, personalized explanation that helps you understand why this cours
                 "stream": False
             }
             
-            async def test_call():
-                async with httpx.AsyncClient(timeout=10) as client:
-                    response = await client.post(
-                        self.ollama_url,
-                        json=test_payload,
-                        headers={"Content-Type": "application/json"}
-                    )
-                    return response
-            
-            # Run the test
-            response = asyncio.run(test_call())
-            
-            if response.status_code == 200:
-                return {
-                    "connected": True,
-                    "model": self.model_name,
-                    "url": self.ollama_url
-                }
-            else:
-                return {
-                    "connected": False,
-                    "error": f"HTTP {response.status_code}",
-                    "model": self.model_name,
-                    "url": self.ollama_url
-                }
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=10.0,   # 10 seconds to establish connection
+                    read=20.0,      # 20 seconds to read response
+                    write=10.0,     # 10 seconds to write request
+                    pool=30.0       # 30 seconds pool timeout
+                )
+            ) as client:
+                response = await client.post(
+                    self.ollama_url,
+                    json=test_payload,
+                    headers={"Content-Type": "application/json"}
+                )
                 
+                if response.status_code == 200:
+                    return {
+                        "connected": True,
+                        "model": self.model_name,
+                        "url": self.ollama_url,
+                        "response_time": "normal"
+                    }
+                else:
+                    return {
+                        "connected": False,
+                        "error": f"HTTP {response.status_code}",
+                        "model": self.model_name,
+                        "url": self.ollama_url
+                    }
+                    
+        except httpx.TimeoutException:
+            return {
+                "connected": False,
+                "error": "Connection timeout",
+                "model": self.model_name,
+                "url": self.ollama_url
+            }
+        except httpx.ConnectError:
+            return {
+                "connected": False,
+                "error": "Connection failed - service unavailable",
+                "model": self.model_name,
+                "url": self.ollama_url
+            }
         except Exception as e:
             return {
                 "connected": False,
                 "error": str(e),
                 "model": self.model_name,
                 "url": self.ollama_url
-            } 
+            }
+    
+    async def close(self):
+        """Cleanup LLM service connection pool."""
+        # This method is called during application shutdown
+        pass 
